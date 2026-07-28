@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/journal" },
+    { "path": "packages/detectors/contract" },
+    { "path": "packages/detectors/visual" },
+    { "path": "packages/fixers/noop" },
+    { "path": "packages/fixers/harness" },
+    { "path": "packages/cli" }
+  ]
+}

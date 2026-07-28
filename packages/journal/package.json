@@ -1,0 +1,17 @@
+{
+  "name": "@self-heal/journal",
+  "version": "0.0.0",
+  "description": "SQLite record of measured outcomes. Phase 4.",
+  "type": "module",
+  "exports": {
+    "./store": "./dist/store.js",
+    "./schema": "./dist/schema.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@self-heal/core": "workspace:*"
+  }
+}

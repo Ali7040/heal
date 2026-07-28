@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Evidence artifacts stay on disk, never in git (ARCHITECTURE.md §2)
+.self-heal/
+*.sqlite
+*.sqlite-journal
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Env
+.env
+.env.*
+!.env.example
+*.md

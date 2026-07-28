@@ -1,0 +1,6 @@
+packages:
+  - packages/core
+  - packages/journal
+  - packages/cli
+  - packages/detectors/*
+  - packages/fixers/*

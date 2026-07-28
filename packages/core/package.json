@@ -1,0 +1,23 @@
+{
+  "name": "@self-heal/core",
+  "version": "0.0.0",
+  "description": "Contracts, state machine, and safety invariants for the self-healing loop. Depends on nothing.",
+  "type": "module",
+  "exports": {
+    "./contracts/issue": "./dist/contracts/issue.js",
+    "./contracts/detector": "./dist/contracts/detector.js",
+    "./contracts/fixer": "./dist/contracts/fixer.js",
+    "./contracts/diagnosis": "./dist/contracts/diagnosis.js",
+    "./contracts/patch": "./dist/contracts/patch.js",
+    "./contracts/context": "./dist/contracts/context.js",
+    "./runner/state": "./dist/runner/state.js",
+    "./safety/allowlist": "./dist/safety/allowlist.js",
+    "./safety/circuit-breaker": "./dist/safety/circuit-breaker.js",
+    "./signature": "./dist/signature.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {}
+}

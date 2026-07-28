@@ -1,0 +1,16 @@
+{
+  "name": "@self-heal/fixer-noop",
+  "version": "0.0.0",
+  "description": "Logs the diagnosis and returns an empty patch. The fixer the test suite runs against.",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@self-heal/core": "workspace:*"
+  }
+}
