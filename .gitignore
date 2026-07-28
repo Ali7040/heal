@@ -18,4 +18,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+# Design docs stay local; the README is the only published markdown.
 *.md
+!README.md
