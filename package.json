@@ -12,9 +12,13 @@
     "typecheck": "tsc --build --force",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "probe:harness": "node scripts/harness-probe.mjs"
   },
   "devDependencies": {
+    "@self-heal/core": "workspace:*",
+    "@self-heal/fixer-harness": "workspace:*",
+    "@self-heal/testkit": "workspace:*",
     "@eslint/js": "^9.18.0",
     "@types/node": "^22.10.7",
     "eslint": "^9.18.0",

@@ -13,7 +13,9 @@
     "./runner/state": "./dist/runner/state.js",
     "./safety/allowlist": "./dist/safety/allowlist.js",
     "./safety/circuit-breaker": "./dist/safety/circuit-breaker.js",
-    "./signature": "./dist/signature.js"
+    "./signature": "./dist/signature.js",
+    "./process": "./dist/process.js",
+    "./git/repo": "./dist/git/repo.js"
   },
   "files": ["dist"],
   "scripts": {

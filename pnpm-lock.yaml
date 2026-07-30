@@ -11,6 +11,15 @@ importers:
       '@eslint/js':
         specifier: ^9.18.0
         version: 9.39.5
+      '@self-heal/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@self-heal/fixer-harness':
+        specifier: workspace:*
+        version: link:packages/fixers/harness
+      '@self-heal/testkit':
+        specifier: workspace:*
+        version: link:packages/testkit
       '@types/node':
         specifier: ^22.10.7
         version: 22.20.1
@@ -58,6 +67,10 @@ importers:
       '@self-heal/core':
         specifier: workspace:*
         version: link:../../core
+    devDependencies:
+      '@self-heal/testkit':
+        specifier: workspace:*
+        version: link:../../testkit
 
   packages/fixers/noop:
     dependencies:
@@ -66,6 +79,12 @@ importers:
         version: link:../../core
 
   packages/journal:
+    dependencies:
+      '@self-heal/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/testkit:
     dependencies:
       '@self-heal/core':
         specifier: workspace:*

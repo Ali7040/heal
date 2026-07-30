@@ -1,10 +1,13 @@
 {
   "name": "@self-heal/fixer-harness",
   "version": "0.0.0",
-  "description": "Adapter that drives the user's installed agent harness. Filled in after the phase-0 spike (D-005).",
+  "description": "Adapter that drives the user's installed agent harness in a sandbox and captures the resulting patch from git.",
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./profiles": "./dist/profiles.js",
+    "./invoke": "./dist/invoke.js",
+    "./capture": "./dist/capture.js"
   },
   "files": ["dist"],
   "scripts": {
@@ -12,5 +15,8 @@
   },
   "dependencies": {
     "@self-heal/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@self-heal/testkit": "workspace:*"
   }
 }

@@ -4,6 +4,13 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   { ignores: ['**/dist/**', '**/node_modules/**'] },
+  {
+    // Node globals. TS files get these from @types/node; plain .mjs scripts need
+    // them declared or `process` reads as an undefined browser global.
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly' },
+    },
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

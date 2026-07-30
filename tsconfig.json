@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/journal" },
+    { "path": "packages/testkit" },
     { "path": "packages/detectors/contract" },
     { "path": "packages/detectors/visual" },
     { "path": "packages/fixers/noop" },

@@ -19,7 +19,7 @@ tested; the runner, detectors, journal, and harness adapter are not implemented 
 
 | Phase | Deliverable | State |
 |---|---|---|
-| 0 | Harness invocation spike | not started |
+| 0 | Harness invocation spike | **done** — 4/4 unattended heals, ~15–24s, ~$0.20 each |
 | 1 | `core` + contracts + `noop` fixer | contracts + safety done; runner pending |
 | 2 | Contract detector | stub |
 | 3 | Real fixer + verify + git safety | — |
@@ -35,12 +35,18 @@ Phase 3 is the product. Phases 4–6 make it shippable; phases 0–2 make it pos
 
 ```
 packages/
-  core/         contracts, state machine, safety — zero external deps
+  core/         contracts, state machine, safety, process + git — zero external deps
   detectors/    contract/ (API schema) · visual/ (Playwright + pixel)
-  fixers/       harness/ (adapter) · noop/ (dev + tests)
+  fixers/       harness/ (drives your agent CLI) · noop/ (dev + tests)
   journal/      SQLite outcome store
+  testkit/      sandboxes, fixtures, measurement — shared by everything
   cli/          arg parsing, config loading
+scripts/
+  harness-probe.mjs   repeatable experiment: can we drive a harness and capture a patch?
 ```
+
+Code is organized by what it does, not by which phase produced it. Phases are a
+schedule; they end, and the code outlives them.
 
 `core` depends on nothing and stays independently publishable. That is the test of
 whether the dependency rule actually held.
