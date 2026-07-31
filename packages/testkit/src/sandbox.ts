@@ -47,6 +47,11 @@ export class Sandbox {
 
     const git = new GitRepo({ dir });
     await git.init();
+    // Without this, a `reset --hard` on Windows restores files through autocrlf
+    // conversion: the tree is "restored" but the bytes differ from what was
+    // written. A sandbox that cannot round-trip its own fixtures is useless for
+    // asserting that a revert left no trace.
+    await git.git('config', 'core.autocrlf', 'false');
     const baseline = await git.checkpoint(options.baselineMessage ?? 'baseline');
     if (baseline === null) {
       await rm(dir, { recursive: true, force: true });

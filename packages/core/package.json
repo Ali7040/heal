@@ -10,7 +10,12 @@
     "./contracts/diagnosis": "./dist/contracts/diagnosis.js",
     "./contracts/patch": "./dist/contracts/patch.js",
     "./contracts/context": "./dist/contracts/context.js",
+    "./contracts/journal": "./dist/contracts/journal.js",
     "./runner/state": "./dist/runner/state.js",
+    "./runner/runner": "./dist/runner/runner.js",
+    "./diagnosis/build": "./dist/diagnosis/build.js",
+    "./logger": "./dist/logger.js",
+    "./safety/apply": "./dist/safety/apply.js",
     "./safety/allowlist": "./dist/safety/allowlist.js",
     "./safety/circuit-breaker": "./dist/safety/circuit-breaker.js",
     "./signature": "./dist/signature.js",
@@ -21,5 +26,8 @@
   "scripts": {
     "build": "tsc --build"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "@self-heal/testkit": "workspace:*"
+  }
 }

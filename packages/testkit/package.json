@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     "./sandbox": "./dist/sandbox.js",
+    "./snapshot": "./dist/snapshot.js",
     "./fixtures": "./dist/fixtures.js",
     "./measure": "./dist/measure.js"
   },

@@ -43,13 +43,36 @@ export interface CommandResult {
 export const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
- * True only for a bare command name on Windows, which may be a `.cmd`/`.bat`
- * shim. An absolute path or an explicit `.exe` is spawned directly.
+ * Find the real executable behind a command name.
+ *
+ * Resolving up front is what lets us avoid a shell. On Windows, spawning a bare
+ * name like `git` forces `shell: true`, and cmd.exe then re-parses the whole
+ * command line — so `commit -m "fix: thing"` silently becomes four arguments and
+ * git fails with a bewildering pathspec error. Handing spawn an absolute
+ * `git.exe` removes the shell, and with it an entire class of bug that shows up
+ * as "the tool ignored my input".
+ *
+ * Only `.cmd` and `.bat` shims still require a shell — Node refuses to execute
+ * them directly — and that is the narrow case callers keep payloads out of argv
+ * for (see `promptDelivery` in the harness profiles).
  */
-function needsShell(command: string): boolean {
+export async function resolveExecutable(command: string): Promise<string | null> {
+  for (const candidate of await resolveCandidates(command)) {
+    try {
+      await access(candidate, constants.F_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function requiresShell(resolved: string | null, original: string): boolean {
   if (process.platform !== 'win32') return false;
-  if (isAbsolute(command) || command.includes('/') || command.includes('\\')) return false;
-  return !/\.exe$/i.test(command);
+  // Unresolvable: let spawn fail on its own rather than inventing a shell.
+  if (resolved === null) return !isAbsolute(original) && !/\.exe$/i.test(original);
+  return /\.(cmd|bat)$/i.test(resolved);
 }
 
 /**
@@ -62,22 +85,7 @@ function needsShell(command: string): boolean {
  * the environment is broken, the other costs the user a retry attempt.
  */
 export async function commandExists(command: string): Promise<boolean> {
-  const candidates = await resolveCandidates(command);
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return true;
-    } catch {
-      // Windows reports X_OK inconsistently; fall back to mere existence.
-      try {
-        await access(candidate, constants.F_OK);
-        return true;
-      } catch {
-        continue;
-      }
-    }
-  }
-  return false;
+  return (await resolveExecutable(command)) !== null;
 }
 
 async function resolveCandidates(command: string): Promise<string[]> {
@@ -86,32 +94,39 @@ async function resolveCandidates(command: string): Promise<string[]> {
       ? (process.env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
       : [''];
 
+  // Order matters on Windows: a tool installed by npm ships both an extensionless
+  // POSIX script and a `.cmd` shim in the same directory. The extensionless file
+  // is not executable by Windows, so the suffixed candidates must be preferred —
+  // picking the wrong one fails instantly and looks like the tool being broken.
+  const ordered = (base: string): string[] =>
+    process.platform === 'win32'
+      ? [...extensions.map((ext) => `${base}${ext}`), base]
+      : [base, ...extensions.map((ext) => `${base}${ext}`)];
+
   if (isAbsolute(command) || command.includes('/') || command.includes('\\')) {
-    return [command, ...extensions.map((ext) => `${command}${ext}`)];
+    return ordered(command);
   }
 
   const dirs = (process.env['PATH'] ?? '').split(delimiter).filter(Boolean);
-  return dirs.flatMap((dir) => [join(dir, command), ...extensions.map((ext) => join(dir, `${command}${ext}`))]);
+  return dirs.flatMap((dir) => ordered(join(dir, command)));
 }
 
-export function runCommand(
+export async function runCommand(
   command: string,
   args: readonly string[],
   options: RunCommandOptions,
 ): Promise<CommandResult> {
+  const resolved = await resolveExecutable(command);
+  const shell = requiresShell(resolved, command);
+
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    const child = spawn(command, [...args], {
+    // Spawn the resolved path where possible so no shell re-parses the arguments.
+    const child = spawn(shell || resolved === null ? command : resolved, [...args], {
       cwd: options.cwd,
-      // A shell is used only when it is unavoidable: on Windows, an npm-installed
-      // CLI is a `.cmd` shim that Node cannot launch directly. Everywhere else —
-      // including any absolute path or `.exe` — we spawn without one, because
-      // cmd.exe re-parses the command line and silently corrupts arguments
-      // containing quotes, `%`, or newlines. Payloads travel via stdin for the
-      // same reason (see `stdin` below).
-      shell: needsShell(command),
+      shell,
       env: { ...process.env, ...options.env } as NodeJS.ProcessEnv,
       windowsHide: true,
     });

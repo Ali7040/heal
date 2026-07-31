@@ -1,0 +1,16 @@
+{
+  "name": "@self-heal/detector-command",
+  "version": "0.0.0",
+  "description": "Treats any command's exit code as a measurement. The simplest possible detector, and the one that proves the plugin socket works.",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@self-heal/core": "workspace:*"
+  }
+}

@@ -14,20 +14,39 @@ Never that a model reported success.
 
 ## Status
 
-Pre-phase-1. The contracts, safety primitives, and state graph are in place and
-tested; the runner, detectors, journal, and harness adapter are not implemented yet.
+**The loop closes.** A real bug is detected by a deterministic check, fixed with no
+human, and verified by re-running that same check.
+
+```
+     277ms  DETECTING
+     586ms  TRIAGING
+     587ms  DIAGNOSING
+     589ms  CHECKPOINTING
+    2251ms  PROPOSING
+   29061ms  APPLYING      {"edits":1}
+   29068ms  VERIFYING
+   29304ms  HEALED
+
+  HEALED — verified by the originating detector
+```
+
+```bash
+pnpm build && pnpm demo        # dry run — nothing written, no model called
+pnpm build && pnpm demo:heal   # the real thing, using your agent harness
+```
 
 | Phase | Deliverable | State |
 |---|---|---|
-| 0 | Harness invocation spike | **done** — 4/4 unattended heals, ~15–24s, ~$0.20 each |
-| 1 | `core` + contracts + `noop` fixer | contracts + safety done; runner pending |
-| 2 | Contract detector | stub |
-| 3 | Real fixer + verify + git safety | — |
-| 4 | Journal | schema only |
+| 0 | Harness invocation spike | **done** — patch captured from git, not from the model |
+| 1 | Runner + safety + `noop` fixer | **done** — 47 tests, all 7 invariants covered |
+| 2 | Schema-drift detector | not started |
+| 3 | Detected and fixed with no human | **done early** — the timeline above |
+| 4 | Journal | port + replay path exist; SQLite pending |
 | 5 | Visual detector | stub |
-| 6 | CLI + config + packaging | arg parsing only |
+| 6 | CLI + config + packaging | runs; ships the noop fixer |
 
-Phase 3 is the product. Phases 4–6 make it shippable; phases 0–2 make it possible.
+Phase 3 arrived early because phase 0 built the harness adapter as real code rather
+than as a throwaway spike, so wiring it in was a one-line swap.
 
 ---
 
@@ -35,13 +54,14 @@ Phase 3 is the product. Phases 4–6 make it shippable; phases 0–2 make it pos
 
 ```
 packages/
-  core/         contracts, state machine, safety, process + git — zero external deps
-  detectors/    contract/ (API schema) · visual/ (Playwright + pixel)
+  core/         contracts, runner, safety, process + git — zero external deps
+  detectors/    command/ (exit codes) · contract/ (API schema) · visual/ (pixels)
   fixers/       harness/ (drives your agent CLI) · noop/ (dev + tests)
   journal/      SQLite outcome store
   testkit/      sandboxes, fixtures, measurement — shared by everything
   cli/          arg parsing, config loading
 scripts/
+  demo.mjs            the narrated loop, dry or live
   harness-probe.mjs   repeatable experiment: can we drive a harness and capture a patch?
 ```
 

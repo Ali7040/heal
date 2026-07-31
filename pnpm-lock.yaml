@@ -14,9 +14,15 @@ importers:
       '@self-heal/core':
         specifier: workspace:*
         version: link:packages/core
+      '@self-heal/detector-command':
+        specifier: workspace:*
+        version: link:packages/detectors/command
       '@self-heal/fixer-harness':
         specifier: workspace:*
         version: link:packages/fixers/harness
+      '@self-heal/fixer-noop':
+        specifier: workspace:*
+        version: link:packages/fixers/noop
       '@self-heal/testkit':
         specifier: workspace:*
         version: link:packages/testkit
@@ -41,14 +47,24 @@ importers:
       '@self-heal/core':
         specifier: workspace:*
         version: link:../core
-      '@self-heal/detector-contract':
+      '@self-heal/detector-command':
         specifier: workspace:*
-        version: link:../detectors/contract
+        version: link:../detectors/command
       '@self-heal/fixer-noop':
         specifier: workspace:*
         version: link:../fixers/noop
 
-  packages/core: {}
+  packages/core:
+    devDependencies:
+      '@self-heal/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+
+  packages/detectors/command:
+    dependencies:
+      '@self-heal/core':
+        specifier: workspace:*
+        version: link:../../core
 
   packages/detectors/contract:
     dependencies:
