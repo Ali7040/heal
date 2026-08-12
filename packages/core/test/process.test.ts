@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { commandExists, runCommand } from '../src/process.js';
+import { commandExists, runCommand, startProcess } from '../src/process.js';
 
 const echoArgs = '-e';
 const printArgv = 'console.log(JSON.stringify(process.argv.slice(1)))';
@@ -55,6 +55,46 @@ describe('runCommand', () => {
 
     expect(result.timedOut).toBe(false);
     expect(result.stdout.trim()).toBe('got:');
+  });
+});
+
+/**
+ * `startProcess` exists for detectors that have to boot the thing they measure —
+ * an API server, in phase 2. The risk it carries is a leaked process holding a
+ * port, which fails the *next* run for a reason that has nothing to do with it.
+ */
+describe('startProcess', () => {
+  it('returns while the process is still running', async () => {
+    const handle = await startProcess(process.execPath, [echoArgs, 'setTimeout(() => {}, 60000)'], {
+      cwd: process.cwd(),
+    });
+
+    expect(handle.pid).toBeGreaterThan(0);
+    await handle.stop();
+    await expect(handle.exited).resolves.not.toBeUndefined();
+  });
+
+  it('is safe to stop twice', async () => {
+    const handle = await startProcess(process.execPath, [echoArgs, 'setTimeout(() => {}, 60000)'], {
+      cwd: process.cwd(),
+    });
+
+    // Called from a `finally` on the happy path and from an abort handler on the
+    // unhappy one — sometimes both, for the same process.
+    await Promise.all([handle.stop(), handle.stop()]);
+    await handle.stop();
+  });
+
+  it('keeps the output of a process that dies on startup', async () => {
+    const handle = await startProcess(process.execPath, [echoArgs, 'console.error("port already in use")'], {
+      cwd: process.cwd(),
+    });
+
+    await handle.exited;
+    // The only thing that distinguishes a port clash from a fixer having just
+    // broken the file it edited.
+    expect(handle.output()).toContain('port already in use');
+    await handle.stop();
   });
 });
 

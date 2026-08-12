@@ -9,7 +9,7 @@
  * has no knowledge of harnesses, git shims, or file systems.
  */
 import { parseArgs } from 'node:util';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import type { Detector } from '@self-heal/core/contracts/detector';
@@ -20,6 +20,7 @@ import { GitRepo } from '@self-heal/core/git/repo';
 import { createConsoleLogger } from '@self-heal/core/logger';
 import { Runner, type IssueOutcome } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
+import { ContractDetector } from '@self-heal/detector-contract';
 import { NoopFixer } from '@self-heal/fixer-noop';
 
 import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './config.js';
@@ -67,6 +68,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         const target = resolve(cwd, values.config as string);
         await writeFile(target, EXAMPLE_CONFIG, { encoding: 'utf8', flag: 'wx' });
         process.stdout.write(`wrote ${target}\n`);
+        if (await ignoreEvidence(cwd)) process.stdout.write(`updated ${resolve(cwd, '.gitignore')}\n`);
         return 0;
       }
       case 'run':
@@ -91,16 +93,24 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   const dryRun = values['dry-run'] === true;
 
   const log = createConsoleLogger({ level: values['verbose'] === true ? 'debug' : 'info' });
-  const detectors: Detector[] = config.checks.map(
-    (check) =>
-      new CommandDetector({
-        id: check.id,
-        command: check.command,
-        args: check.args ?? [],
-        editable: check.editable,
-        ...(check.timeoutMs !== undefined ? { timeoutMs: check.timeoutMs } : {}),
-      }),
-  );
+
+  // Two detector kinds, one list. The runner is handed `Detector[]` and cannot
+  // tell which is which — that indistinguishability is the whole claim of the
+  // plugin boundary, so it is worth noticing that this is the only place in the
+  // codebase where both kinds appear together.
+  const detectors: Detector[] = [
+    ...config.checks.map(
+      (check) =>
+        new CommandDetector({
+          id: check.id,
+          command: check.command,
+          args: check.args ?? [],
+          editable: check.editable,
+          ...(check.timeoutMs !== undefined ? { timeoutMs: check.timeoutMs } : {}),
+        }),
+    ),
+    ...(config.contracts === undefined ? [] : [buildContractDetector(config.contracts)]),
+  ];
 
   const ctx: RunContext = {
     repoRoot: config.repoRoot,
@@ -149,8 +159,64 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   return unresolved.length > 0 ? 1 : 0;
 }
 
+/**
+ * Keep run artifacts out of git.
+ *
+ * Not housekeeping — a correctness problem. Evidence files land in
+ * `.self-heal/evidence/`, an untracked file makes the tree dirty, and a dirty
+ * tree halts the *next* run (invariant 5). Left alone, the tool disables itself
+ * after one successful run, for a reason that looks nothing like the cause.
+ *
+ * Recorded contracts are deliberately NOT ignored: those are reviewed and
+ * committed, and are the only human judgement in the loop.
+ */
+async function ignoreEvidence(cwd: string): Promise<boolean> {
+  const target = resolve(cwd, '.gitignore');
+  const existing = await readFile(target, 'utf8').catch(() => '');
+  if (existing.split(/\r?\n/).some((line) => line.trim() === IGNORE_ENTRY)) return false;
+
+  const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n';
+  await writeFile(target, `${existing}${prefix}\n# self-heal run artifacts (recorded contracts stay tracked)\n${IGNORE_ENTRY}\n`, 'utf8');
+  return true;
+}
+
+const IGNORE_ENTRY = '.self-heal/evidence/';
+
+function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts']>): ContractDetector {
+  return new ContractDetector({
+    id: contracts.id,
+    endpoints: contracts.endpoints.map((endpoint) => ({
+      name: endpoint.name,
+      url: endpoint.url,
+      ...(endpoint.method !== undefined ? { method: endpoint.method } : {}),
+      ...(endpoint.headers !== undefined ? { headers: endpoint.headers } : {}),
+      editable: endpoint.editable,
+    })),
+    ...(contracts.server !== undefined ? { server: contracts.server } : {}),
+    ...(contracts.contractsDir !== undefined ? { contractsDir: contracts.contractsDir } : {}),
+    ...(contracts.strict === true ? { strict: true } : {}),
+    ...(contracts.record !== undefined ? { record: contracts.record } : {}),
+  });
+}
+
+/**
+ * Which files a fixer may edit for this issue.
+ *
+ * Narrower than the allowlist on purpose: the allowlist is what the system will
+ * *permit*, while this is what is actually relevant to one failure. Handing a
+ * fixer the full allowlist for a single dropped API field invites it to go
+ * exploring.
+ */
 function editableFor(issue: Issue, config: SelfHealConfig): readonly string[] {
-  return config.checks.find((check) => check.id === issue.detectorId)?.editable ?? config.allowlist;
+  const check = config.checks.find((candidate) => candidate.id === issue.detectorId);
+  if (check !== undefined) return check.editable;
+
+  if (config.contracts?.id === issue.detectorId) {
+    const endpoint = config.contracts.endpoints.find((candidate) => candidate.name === issue.location.endpoint);
+    if (endpoint !== undefined) return endpoint.editable;
+  }
+
+  return config.allowlist;
 }
 
 function formatReport(outcomes: readonly IssueOutcome[], issues: number, dryRun: boolean): string {

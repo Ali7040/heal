@@ -111,6 +111,85 @@ async function resolveCandidates(command: string): Promise<string[]> {
   return dirs.flatMap((dir) => ordered(join(dir, command)));
 }
 
+/** A process that outlives the call that started it. */
+export interface ProcessHandle {
+  readonly pid: number | undefined;
+  /** Everything the process has written so far. Useful when it dies on startup. */
+  output(): string;
+  /** Resolves once the process is gone. Safe to call more than once. */
+  stop(): Promise<void>;
+  /** Resolves when the process exits on its own. */
+  readonly exited: Promise<number | null>;
+}
+
+/**
+ * Start a process and hand back a handle instead of waiting for it to finish.
+ *
+ * `runCommand` covers the common case — run something, read its verdict — but a
+ * detector that measures a live HTTP endpoint has to boot the server first, and
+ * a server that exits is a server that measured nothing.
+ *
+ * The reason this lives here rather than in the detector: process spawning is
+ * where the Windows shell-reparsing bug class lives, and the fix for it is the
+ * `resolveExecutable` call below. A second `spawn` anywhere else in the codebase
+ * would be a second place for that bug to come back.
+ */
+export async function startProcess(
+  command: string,
+  args: readonly string[],
+  options: Omit<RunCommandOptions, 'timeoutMs' | 'stdin'>,
+): Promise<ProcessHandle> {
+  const resolved = await resolveExecutable(command);
+  const shell = requiresShell(resolved, command);
+
+  const child = spawn(shell || resolved === null ? command : resolved, [...args], {
+    cwd: options.cwd,
+    shell,
+    env: { ...process.env, ...options.env } as NodeJS.ProcessEnv,
+    windowsHide: true,
+  });
+
+  let output = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk: string) => {
+    output += chunk;
+  });
+  child.stderr?.on('data', (chunk: string) => {
+    output += chunk;
+  });
+  child.on('error', (error: Error) => {
+    output += `${error.message}\n`;
+  });
+  child.stdin?.end();
+
+  const exited = new Promise<number | null>((resolve) => {
+    child.once('close', (code) => resolve(code));
+  });
+
+  const onAbort = () => void stop();
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+
+  let stopping: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    // Idempotent on purpose: this is called from a `finally` on the happy path
+    // and from an abort handler on the unhappy one, sometimes both.
+    stopping ??= (async () => {
+      options.signal?.removeEventListener('abort', onAbort);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
+    })();
+    return stopping;
+  };
+
+  return {
+    pid: child.pid,
+    output: () => output,
+    stop,
+    exited,
+  };
+}
+
 export async function runCommand(
   command: string,
   args: readonly string[],

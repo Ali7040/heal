@@ -8,7 +8,8 @@
     "./sandbox": "./dist/sandbox.js",
     "./snapshot": "./dist/snapshot.js",
     "./fixtures": "./dist/fixtures.js",
-    "./measure": "./dist/measure.js"
+    "./measure": "./dist/measure.js",
+    "./server": "./dist/server.js"
   },
   "scripts": {
     "build": "tsc --build"

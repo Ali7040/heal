@@ -24,7 +24,15 @@ export interface Measurement {
 }
 
 export async function measure(fixture: Fixture, dir: string, timeoutMs = 30_000): Promise<Measurement> {
-  const result = await runCommand(fixture.check.command, fixture.check.args, { cwd: dir, timeoutMs });
+  const check = fixture.check;
+  if (check === undefined) {
+    // Since phase 2 a fixture may be server-shaped instead of command-shaped.
+    // Failing loudly beats reporting `healthy: false` for a fixture that simply
+    // is not measured this way — a silent false would look like a real defect.
+    throw new Error(`fixture "${fixture.id}" has no check command; measure it with the detector it was written for`);
+  }
+
+  const result = await runCommand(check.command, check.args, { cwd: dir, timeoutMs });
 
   return {
     // A timeout is not health. Only a clean exit 0 counts as healthy.

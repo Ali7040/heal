@@ -21,9 +21,39 @@ export interface CheckConfig {
   readonly timeoutMs?: number;
 }
 
+/** One endpoint under contract. */
+export interface EndpointConfigInput {
+  readonly name: string;
+  readonly url: string;
+  readonly method?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly editable: readonly string[];
+}
+
+/**
+ * The API-contract half of the config.
+ *
+ * `server` is shared by every endpoint because booting is expensive and the
+ * detector boots once per measurement, not once per endpoint.
+ */
+export interface ContractsConfig {
+  readonly id: string;
+  readonly endpoints: readonly EndpointConfigInput[];
+  readonly server?: {
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly readyUrl: string;
+    readonly readyTimeoutMs?: number;
+  };
+  readonly contractsDir?: string;
+  readonly strict?: boolean;
+  readonly record?: 'missing' | 'never';
+}
+
 export interface SelfHealConfig {
   readonly repoRoot: string;
   readonly checks: readonly CheckConfig[];
+  readonly contracts?: ContractsConfig;
   /** Globs a patch may touch, repo-relative. */
   readonly allowlist: readonly string[];
   readonly harness: string;
@@ -67,9 +97,13 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
   }
   const record = input as Record<string, unknown>;
 
-  const checks = record['checks'];
-  if (!Array.isArray(checks) || checks.length === 0) {
-    throw new ConfigError('config.checks must be a non-empty array — there is nothing to detect otherwise');
+  const checks = Array.isArray(record['checks']) ? record['checks'] : [];
+  const contracts = validateContracts(record['contracts']);
+  // Either kind of detector is enough on its own; neither is not.
+  if (checks.length === 0 && contracts === undefined) {
+    throw new ConfigError(
+      'config needs at least one detector: a non-empty `checks` array, `contracts.endpoints`, or both.',
+    );
   }
 
   const allowlist = record['allowlist'];
@@ -83,6 +117,7 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
   return {
     repoRoot: typeof record['repoRoot'] === 'string' ? resolve(cwd, record['repoRoot']) : cwd,
     checks: checks.map((check, index) => validateCheck(check, index)),
+    ...(contracts !== undefined ? { contracts } : {}),
     allowlist: allowlist.map(String),
     harness: typeof record['harness'] === 'string' ? record['harness'] : DEFAULTS.harness,
     attemptCap: typeof record['attemptCap'] === 'number' ? record['attemptCap'] : DEFAULTS.attemptCap,
@@ -117,6 +152,99 @@ function validateCheck(input: unknown, index: number): CheckConfig {
     editable,
     ...(typeof record['timeoutMs'] === 'number' ? { timeoutMs: record['timeoutMs'] } : {}),
   };
+}
+
+function validateContracts(input: unknown): ContractsConfig | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input !== 'object') throw new ConfigError('config.contracts must be an object');
+  const record = input as Record<string, unknown>;
+
+  const endpoints = record['endpoints'];
+  if (!Array.isArray(endpoints) || endpoints.length === 0) {
+    throw new ConfigError('config.contracts.endpoints must be a non-empty array');
+  }
+
+  const server = record['server'];
+  let parsedServer: ContractsConfig['server'];
+  if (server !== undefined && server !== null) {
+    const serverRecord = server as Record<string, unknown>;
+    if (typeof serverRecord['command'] !== 'string' || typeof serverRecord['readyUrl'] !== 'string') {
+      throw new ConfigError(
+        'config.contracts.server needs `command` and `readyUrl`.\n' +
+          '`readyUrl` is polled until it answers — without it, probing races the server startup.',
+      );
+    }
+    parsedServer = {
+      command: serverRecord['command'],
+      args: Array.isArray(serverRecord['args']) ? serverRecord['args'].map(String) : [],
+      readyUrl: serverRecord['readyUrl'],
+      ...(typeof serverRecord['readyTimeoutMs'] === 'number'
+        ? { readyTimeoutMs: serverRecord['readyTimeoutMs'] }
+        : {}),
+    };
+  }
+
+  const record_ = record['record'];
+  if (record_ !== undefined && record_ !== 'missing' && record_ !== 'never') {
+    throw new ConfigError('config.contracts.record must be "missing" or "never"');
+  }
+
+  return {
+    id: typeof record['id'] === 'string' ? record['id'] : 'contract',
+    endpoints: endpoints.map((endpoint, index) => validateEndpoint(endpoint, index)),
+    ...(parsedServer !== undefined ? { server: parsedServer } : {}),
+    ...(typeof record['contractsDir'] === 'string' ? { contractsDir: record['contractsDir'] } : {}),
+    ...(record['strict'] === true ? { strict: true } : {}),
+    ...(record_ !== undefined ? { record: record_ } : {}),
+  };
+}
+
+function validateEndpoint(input: unknown, index: number): EndpointConfigInput {
+  if (typeof input !== 'object' || input === null) {
+    throw new ConfigError(`config.contracts.endpoints[${index}] must be an object`);
+  }
+  const record = input as Record<string, unknown>;
+
+  const url = record['url'];
+  if (typeof url !== 'string' || url === '') {
+    throw new ConfigError(`config.contracts.endpoints[${index}].url is required`);
+  }
+
+  const editable = Array.isArray(record['editable']) ? record['editable'].map(String) : [];
+  if (editable.length === 0) {
+    throw new ConfigError(
+      `config.contracts.endpoints[${index}].editable is required — a fixer needs to know which files serve this endpoint`,
+    );
+  }
+
+  const method = typeof record['method'] === 'string' ? record['method'].toUpperCase() : 'GET';
+  return {
+    // The name is the contract's filename and the issue's identity, so it must
+    // not change when the host does. Defaulting to `METHOD /path` keeps a
+    // recorded contract valid whether it was captured against localhost or a
+    // staging URL.
+    name: typeof record['name'] === 'string' ? record['name'] : `${method} ${pathOf(url)}`,
+    url,
+    method,
+    ...(isStringRecord(record['headers']) ? { headers: record['headers'] } : {}),
+    editable,
+  };
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.values(value as Record<string, unknown>).every((entry) => typeof entry === 'string')
+  );
 }
 
 /** Written by `self-heal init`. Deliberately small enough to read in one screen. */

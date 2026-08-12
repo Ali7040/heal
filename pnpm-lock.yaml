@@ -17,6 +17,9 @@ importers:
       '@self-heal/detector-command':
         specifier: workspace:*
         version: link:packages/detectors/command
+      '@self-heal/detector-contract':
+        specifier: workspace:*
+        version: link:packages/detectors/contract
       '@self-heal/fixer-harness':
         specifier: workspace:*
         version: link:packages/fixers/harness
@@ -50,6 +53,9 @@ importers:
       '@self-heal/detector-command':
         specifier: workspace:*
         version: link:../detectors/command
+      '@self-heal/detector-contract':
+        specifier: workspace:*
+        version: link:../detectors/contract
       '@self-heal/fixer-noop':
         specifier: workspace:*
         version: link:../fixers/noop
@@ -71,6 +77,10 @@ importers:
       '@self-heal/core':
         specifier: workspace:*
         version: link:../../core
+    devDependencies:
+      '@self-heal/testkit':
+        specifier: workspace:*
+        version: link:../../testkit
 
   packages/detectors/visual:
     dependencies:

@@ -20,6 +20,7 @@
   "devDependencies": {
     "@self-heal/core": "workspace:*",
     "@self-heal/detector-command": "workspace:*",
+    "@self-heal/detector-contract": "workspace:*",
     "@self-heal/fixer-noop": "workspace:*",
     "@self-heal/fixer-harness": "workspace:*",
     "@self-heal/testkit": "workspace:*",

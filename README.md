@@ -33,20 +33,38 @@ human, and verified by re-running that same check.
 ```bash
 pnpm build && pnpm demo        # dry run — nothing written, no model called
 pnpm build && pnpm demo:heal   # the real thing, using your agent harness
+
+pnpm demo --fixture orders-total-dropped --heal   # the API contract bug
+pnpm demo --list                                  # every fixture
+```
+
+Two detector kinds now run through the same unmodified engine — an exit code, and an
+API response compared against a recorded contract:
+
+```
+   15234ms  HEALED
+
+- return orders.map(({ id, customer, currency })    => ({ id, customer, currency }));
++ return orders.map(({ id, customer, total, currency }) => ({ id, customer, total, currency }));
 ```
 
 | Phase | Deliverable | State |
 |---|---|---|
 | 0 | Harness invocation spike | **done** — patch captured from git, not from the model |
-| 1 | Runner + safety + `noop` fixer | **done** — 47 tests, all 7 invariants covered |
-| 2 | Schema-drift detector | not started |
+| 1 | Runner + safety + `noop` fixer | **done** — all 7 invariants covered |
+| 2 | Schema-drift detector | **done** — detects *and* heals a dropped API field |
 | 3 | Detected and fixed with no human | **done early** — the timeline above |
 | 4 | Journal | port + replay path exist; SQLite pending |
-| 5 | Visual detector | stub |
-| 6 | CLI + config + packaging | runs; ships the noop fixer |
+| 5 | Visual detector | stub — every method throws |
+| 6 | CLI + config + packaging | runs both detector kinds; ships the noop fixer |
+
+81 tests, no network, no model calls.
 
 Phase 3 arrived early because phase 0 built the harness adapter as real code rather
-than as a throwaway spike, so wiring it in was a one-line swap.
+than as a throwaway spike, so wiring it in was a one-line swap. Phase 2 was the test
+of whether that boundary was real: a detector needing a running server, a recorded
+baseline, on-disk artifacts, and partial equality was added without the engine
+changing. `core` gained one primitive (`startProcess`) and no knowledge of HTTP.
 
 ---
 
@@ -55,13 +73,13 @@ than as a throwaway spike, so wiring it in was a one-line swap.
 ```
 packages/
   core/         contracts, runner, safety, process + git — zero external deps
-  detectors/    command/ (exit codes) · contract/ (API schema) · visual/ (pixels)
+  detectors/    command/ (exit codes) · contract/ (API schema) · visual/ (stub)
   fixers/       harness/ (drives your agent CLI) · noop/ (dev + tests)
-  journal/      SQLite outcome store
-  testkit/      sandboxes, fixtures, measurement — shared by everything
+  journal/      SQLite outcome store — interface only, phase 4
+  testkit/      sandboxes, fixtures, servers, measurement — shared by everything
   cli/          arg parsing, config loading
 scripts/
-  demo.mjs            the narrated loop, dry or live
+  demo.mjs            the narrated loop, dry or live, any fixture
   harness-probe.mjs   repeatable experiment: can we drive a harness and capture a patch?
 ```
 
@@ -86,6 +104,37 @@ Assertions in the engine, not guidelines. Each one is covered by a test.
 5. A dirty working tree blocks automatic changes unless explicitly overridden.
 6. N consecutive failed heals trip the circuit breaker and halt the run.
 7. `--dry-run` is a real code path, not a flag checked at the last moment.
+
+---
+
+## API contracts
+
+A recorded contract is the shape of a response with every value discarded — which
+fields exist and what type each holds. It is written to `.self-heal/contracts/` the
+first time an endpoint is seen, and **committed like source**. A human reviewed it
+once; everything after that is machinery noticing when reality stops matching it.
+
+```json
+{
+  "contracts": {
+    "endpoints": [
+      { "url": "http://127.0.0.1:3000/api/orders", "editable": ["src/api/**/*.ts"] }
+    ],
+    "server": {
+      "command": "npm",
+      "args": ["run", "dev"],
+      "readyUrl": "http://127.0.0.1:3000/api/health"
+    }
+  }
+}
+```
+
+The server is booted fresh for detection and again for verification. A process
+started before the fix would still be serving the old code, and re-probing it would
+report `HEALED` for a patch that changed nothing (D-011).
+
+Removing a field is drift. Adding one is not, unless you set `"strict": true` —
+a detector that fires on every shipped feature is a detector people mute (D-010).
 
 ---
 

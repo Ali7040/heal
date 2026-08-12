@@ -13,6 +13,7 @@
   "dependencies": {
     "@self-heal/core": "workspace:*",
     "@self-heal/detector-command": "workspace:*",
+    "@self-heal/detector-contract": "workspace:*",
     "@self-heal/fixer-noop": "workspace:*"
   }
 }

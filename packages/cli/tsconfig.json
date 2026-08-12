@@ -8,6 +8,7 @@
   "references": [
     { "path": "../core" },
     { "path": "../detectors/command" },
+    { "path": "../detectors/contract" },
     { "path": "../fixers/noop" }
   ]
 }

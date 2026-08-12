@@ -1,10 +1,15 @@
 {
   "name": "@self-heal/detector-contract",
   "version": "0.0.0",
-  "description": "Detects API response schema drift. Phase 2.",
+  "description": "Detects API response schema drift by comparing a live response against a recorded contract.",
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./shape": "./dist/shape.js",
+    "./diff": "./dist/diff.js",
+    "./probe": "./dist/probe.js",
+    "./baseline": "./dist/baseline.js",
+    "./server": "./dist/server.js"
   },
   "files": ["dist"],
   "scripts": {
@@ -12,5 +17,8 @@
   },
   "dependencies": {
     "@self-heal/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@self-heal/testkit": "workspace:*"
   }
 }
