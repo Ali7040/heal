@@ -17,18 +17,11 @@ Never that a model reported success.
 **The loop closes.** A real bug is detected by a deterministic check, fixed with no
 human, and verified by re-running that same check.
 
-```
-     277ms  DETECTING
-     586ms  TRIAGING
-     587ms  DIAGNOSING
-     589ms  CHECKPOINTING
-    2251ms  PROPOSING
-   29061ms  APPLYING      {"edits":1}
-   29068ms  VERIFYING
-   29304ms  HEALED
+![A terminal recording of one real run: the loop detects a failing check, proposes a fix through the agent harness, applies it, re-runs the same check, and reaches HEALED in 17.79 seconds](assets/self-heal-demo.gif)
 
-  HEALED — verified by the originating detector
-```
+One real run, unedited — 17.79s, one attempt, no human. The pause between
+`PROPOSING` and `APPLYING` is the harness editing a disposable sandbox; the patch is
+read back out of git rather than parsed from what the model says it changed.
 
 ```bash
 pnpm build && pnpm demo        # dry run — nothing written, no model called
