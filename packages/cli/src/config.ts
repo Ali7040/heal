@@ -60,6 +60,8 @@ export interface SelfHealConfig {
   readonly attemptCap: number;
   readonly failureThreshold: number;
   readonly evidenceDir: string;
+  /** Outcome journal, relative to the repo root. Gitignored by `self-heal init`. */
+  readonly journalPath: string;
 }
 
 const DEFAULTS = {
@@ -67,6 +69,7 @@ const DEFAULTS = {
   attemptCap: 2,
   failureThreshold: 3,
   evidenceDir: '.self-heal/evidence',
+  journalPath: '.self-heal/journal.sqlite',
 } as const;
 
 export async function loadConfig(path: string, cwd: string): Promise<SelfHealConfig> {
@@ -124,6 +127,7 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
     failureThreshold:
       typeof record['failureThreshold'] === 'number' ? record['failureThreshold'] : DEFAULTS.failureThreshold,
     evidenceDir: typeof record['evidenceDir'] === 'string' ? record['evidenceDir'] : DEFAULTS.evidenceDir,
+    journalPath: typeof record['journalPath'] === 'string' ? record['journalPath'] : DEFAULTS.journalPath,
   };
 }
 

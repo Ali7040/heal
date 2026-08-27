@@ -284,13 +284,13 @@ export class Runner {
       this.#breaker.recordFailure();
       const reason = 'verification failed; tree restored';
       this.#to('REVERTED', issue.signature, { reason });
-      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts });
+      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts, replayed });
       return { issue, state: 'REVERTED', attempts, patch, reason, replayed };
     }
 
     this.#breaker.recordSuccess();
     this.#to('HEALED', issue.signature, { replayed });
-    await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: true, attempts });
+    await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: true, attempts, replayed });
 
     return {
       issue,

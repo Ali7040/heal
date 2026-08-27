@@ -31,11 +31,15 @@ import { Sandbox } from '@self-heal/testkit/sandbox';
 import { snapshotDir } from '@self-heal/testkit/snapshot';
 import { freePort } from '@self-heal/testkit/server';
 import { FIXTURES, getFixture } from '@self-heal/testkit/fixtures';
+import { openJournal } from '@self-heal/journal/store';
 
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((arg) => arg.startsWith('--')));
 const heal = flags.has('--heal');
 const fixtureId = valueOf('--fixture') ?? 'pricing-tax-ignored';
+// Runs the loop, puts the bug back, and runs it again. The second pass is the
+// point of the journal: same regression, no model call.
+const twice = flags.has('--twice');
 
 const BOLD = '[1m';
 const DIM = '[2m';
@@ -73,7 +77,9 @@ async function createWorkspace() {
   return { dir: workspace.dir, dispose: () => workspace.dispose() };
 }
 
-const runner = new Runner({
+const journal = await openJournal(`${sandbox.dir}/.self-heal/journal.sqlite`);
+
+const makeRunner = () => new Runner({
   detectors: [detector],
   // The only difference between "shows what it would fix" and "fixes it" is
   // which object is passed here. That is the Fixer boundary doing its job.
@@ -90,6 +96,7 @@ const runner = new Runner({
   attemptCap: 2,
   diagnose: (issue) =>
     buildDiagnosis(issue, { repoRoot: sandbox.dir, editableFiles: [...fixture.editable] }),
+  journal,
   onTransition: (event) => {
     const at = Date.now() - started;
     const note = event.detail ? ` ${DIM}${JSON.stringify(event.detail)}${RESET}` : '';
@@ -98,7 +105,7 @@ const runner = new Runner({
 });
 
 console.log(`${BOLD}The loop${RESET}  ${DIM}${describeMeasurement}${RESET}`);
-const report = await runner.run();
+const report = await makeRunner().run();
 const outcome = report.outcomes[0];
 
 console.log(`\n${BOLD}Result${RESET}`);
@@ -133,11 +140,37 @@ if (report.halted) {
   }
 }
 
+/**
+ * The second pass — what the journal is for.
+ *
+ * The fix is committed, then the regression is put back in another commit: a
+ * revert, a bad merge, a colleague's branch. The loop meets a bug it has seen
+ * before, and the transition list is the whole argument — `REPLAY` appears,
+ * `PROPOSING` does not.
+ */
+if (twice && heal && outcome?.state === 'HEALED') {
+  const repo = new GitRepo({ dir: sandbox.dir });
+  await repo.checkpoint('demo: ship the fix');
+  await sandbox.write(fixture.primary, fixture.files[fixture.primary]);
+  await repo.checkpoint('demo: the regression comes back');
+
+  console.log(`\n${BOLD}The same bug, a second time${RESET}  ${DIM}journal is warm${RESET}`);
+  const second = await makeRunner().run();
+  const again = second.outcomes[0];
+
+  console.log(`\n${BOLD}Result${RESET}`);
+  console.log(`  ${again?.state === 'HEALED' ? GREEN : RED}${again?.state}${RESET} — ${again?.reason}`);
+  const stats = journal.stats();
+  console.log(`  ${GREEN}model calls this run: 0${RESET}   total: ${second.durationMs}ms`);
+  console.log(`  ${DIM}journal: ${stats.replays} call(s) skipped, ${stats.verified} verified fix(es) remembered${RESET}`);
+}
+
 if (!heal) {
   console.log(`\n${DIM}This was a dry run: nothing was written, no commit was made, no model was called.`);
   console.log(`Run with --heal to close the loop with your agent harness.${RESET}`);
 }
 
+journal.close();
 await sandbox.dispose();
 
 /** Detector selection is data-driven — the fixture's shape decides, not a flag. */

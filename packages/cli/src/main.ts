@@ -22,6 +22,7 @@ import { Runner, type IssueOutcome } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
 import { ContractDetector } from '@self-heal/detector-contract';
 import { NoopFixer } from '@self-heal/fixer-noop';
+import { openJournal, UnsupportedRuntimeError, type Journal } from '@self-heal/journal/store';
 
 import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './config.js';
 
@@ -39,6 +40,8 @@ Options:
   --config       Path to config (default: ./self-heal.config.json)
   --verbose      Include debug-level log lines.
   --json         Emit the run report as JSON on stdout.
+  --no-journal   Do not consult or update the outcome journal. Every occurrence
+                 of a known regression then pays for a fresh model call.
 `;
 
 export async function main(argv: readonly string[]): Promise<number> {
@@ -50,6 +53,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       config: { type: 'string', default: './self-heal.config.json' },
       verbose: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
+      journal: { type: 'boolean', default: true },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -68,7 +72,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         const target = resolve(cwd, values.config as string);
         await writeFile(target, EXAMPLE_CONFIG, { encoding: 'utf8', flag: 'wx' });
         process.stdout.write(`wrote ${target}\n`);
-        if (await ignoreEvidence(cwd)) process.stdout.write(`updated ${resolve(cwd, '.gitignore')}\n`);
+        if (await ignoreArtifacts(cwd)) process.stdout.write(`updated ${resolve(cwd, '.gitignore')}\n`);
         return 0;
       }
       case 'run':
@@ -112,6 +116,10 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     ...(config.contracts === undefined ? [] : [buildContractDetector(config.contracts)]),
   ];
 
+  // Opened before the runner so a broken journal is a startup failure with a
+  // readable message, not something discovered after a checkpoint commit exists.
+  const journal = values['journal'] === false ? undefined : await openJournalOrExplain(config, log);
+
   const ctx: RunContext = {
     repoRoot: config.repoRoot,
     evidenceDir: resolve(config.repoRoot, config.evidenceDir),
@@ -128,6 +136,9 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     fixer: new NoopFixer(),
     repo: new GitRepo({ dir: config.repoRoot }),
     ctx,
+    // Absent means `NullJournal` — the runner has no "journal disabled" branch,
+    // it just gets a journal that remembers nothing (phase 1's seam, now filled).
+    ...(journal !== undefined ? { journal } : {}),
     allowlist: config.allowlist,
     attemptCap: config.attemptCap,
     failureThreshold: config.failureThreshold,
@@ -141,11 +152,17 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   });
 
   const report = await runner.run();
+  const savings = journal?.stats();
+  journal?.close();
 
   if (values['json'] === true) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
     process.stdout.write(formatReport(report.outcomes, report.issues, dryRun));
+    if (savings !== undefined && savings.replays > 0) {
+      const line = `journal: ${savings.replays} model call(s) skipped, ${savings.verified} verified fix(es) remembered`;
+      process.stdout.write(`${line}\n`);
+    }
   }
 
   if (report.halted) {
@@ -160,27 +177,54 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
 }
 
 /**
+ * Open the journal, or explain why the run will be paying full price.
+ *
+ * A missing journal is a cost problem, never a correctness one — every outcome is
+ * still measured. So an unusable one degrades to no memory with a warning rather
+ * than halting a run that would otherwise have worked.
+ */
+async function openJournalOrExplain(config: SelfHealConfig, log: ReturnType<typeof createConsoleLogger>): Promise<Journal | undefined> {
+  try {
+    return await openJournal(resolve(config.repoRoot, config.journalPath));
+  } catch (error) {
+    if (error instanceof UnsupportedRuntimeError) {
+      log.warn(`journal disabled: ${error.message}`);
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
  * Keep run artifacts out of git.
  *
  * Not housekeeping — a correctness problem. Evidence files land in
- * `.self-heal/evidence/`, an untracked file makes the tree dirty, and a dirty
- * tree halts the *next* run (invariant 5). Left alone, the tool disables itself
- * after one successful run, for a reason that looks nothing like the cause.
+ * `.self-heal/evidence/` and the journal in `.self-heal/journal.sqlite`; an
+ * untracked file makes the tree dirty, and a dirty tree halts the *next* run
+ * (invariant 5). Left alone, the tool disables itself after one successful run,
+ * for a reason that looks nothing like the cause.
+ *
+ * The `-*` entry covers SQLite's WAL and shared-memory siblings, which appear
+ * only while a database is open and would otherwise dirty the tree mid-run.
  *
  * Recorded contracts are deliberately NOT ignored: those are reviewed and
  * committed, and are the only human judgement in the loop.
  */
-async function ignoreEvidence(cwd: string): Promise<boolean> {
+async function ignoreArtifacts(cwd: string): Promise<boolean> {
   const target = resolve(cwd, '.gitignore');
   const existing = await readFile(target, 'utf8').catch(() => '');
-  if (existing.split(/\r?\n/).some((line) => line.trim() === IGNORE_ENTRY)) return false;
+  const lines = existing.split(/\r?\n/).map((line) => line.trim());
+  const missing = IGNORE_ENTRIES.filter((entry) => !lines.includes(entry));
+  if (missing.length === 0) return false;
 
   const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n';
-  await writeFile(target, `${existing}${prefix}\n# self-heal run artifacts (recorded contracts stay tracked)\n${IGNORE_ENTRY}\n`, 'utf8');
+  const heading = '# self-heal run artifacts (recorded contracts stay tracked)';
+  const block = `\n${heading}\n${missing.join('\n')}\n`;
+  await writeFile(target, `${existing}${prefix}${block}`, 'utf8');
   return true;
 }
 
-const IGNORE_ENTRY = '.self-heal/evidence/';
+const IGNORE_ENTRIES = ['.self-heal/evidence/', '.self-heal/journal.sqlite', '.self-heal/journal.sqlite-*'];
 
 function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts']>): ContractDetector {
   return new ContractDetector({

@@ -28,7 +28,17 @@ pnpm build && pnpm demo        # dry run — nothing written, no model called
 pnpm build && pnpm demo:heal   # the real thing, using your agent harness
 
 pnpm demo --fixture orders-total-dropped --heal   # the API contract bug
+pnpm build && pnpm demo:journal                   # heal it, break it again, watch it replay
 pnpm demo --list                                  # every fixture
+```
+
+The second time it sees a bug, it does not ask a model:
+
+```
+The loop                            The same bug, a second time
+  18074ms  HEALED                     18796ms  REPLAY
+  attempts: 1  total: 18052ms         18943ms  HEALED {"replayed":true}
+                                      model calls this run: 0   total: 305ms
 ```
 
 Two detector kinds now run through the same unmodified engine — an exit code, and an
@@ -47,11 +57,11 @@ API response compared against a recorded contract:
 | 1 | Runner + safety + `noop` fixer | **done** — all 7 invariants covered |
 | 2 | Schema-drift detector | **done** — detects *and* heals a dropped API field |
 | 3 | Detected and fixed with no human | **done early** — the timeline above |
-| 4 | Journal | port + replay path exist; SQLite pending |
+| 4 | Journal | **done** — a repeat regression heals in 305ms for $0 |
 | 5 | Visual detector | stub — every method throws |
 | 6 | CLI + config + packaging | runs both detector kinds; ships the noop fixer |
 
-81 tests, no network, no model calls.
+97 tests, no network, no model calls.
 
 Phase 3 arrived early because phase 0 built the harness adapter as real code rather
 than as a throwaway spike, so wiring it in was a one-line swap. Phase 2 was the test
@@ -68,7 +78,7 @@ packages/
   core/         contracts, runner, safety, process + git — zero external deps
   detectors/    command/ (exit codes) · contract/ (API schema) · visual/ (stub)
   fixers/       harness/ (drives your agent CLI) · noop/ (dev + tests)
-  journal/      SQLite outcome store — interface only, phase 4
+  journal/      SQLite outcome store — node:sqlite, zero deps
   testkit/      sandboxes, fixtures, servers, measurement — shared by everything
   cli/          arg parsing, config loading
 scripts/
@@ -131,9 +141,28 @@ a detector that fires on every shipped feature is a detector people mute (D-010)
 
 ---
 
+## The journal
+
+A record of **measured** outcomes, in SQLite at `.self-heal/journal.sqlite`.
+`verified` is written by the detector's re-run, never by a model's claim.
+
+A hit is a cheaper first guess, not a shortcut. A remembered patch is checkpointed,
+allowlist-checked, applied, and then re-measured exactly like a fresh proposal — so
+a stale patch costs a few seconds and can never cost correctness (D-012). Only
+verified patches are offered, and one that stops working is demoted on its next
+failure.
+
+Backed by `node:sqlite`, so there is no native module to compile and no dependency
+to install — at the cost of needing Node 22.5+. On anything older the journal turns
+itself off with a message and the loop runs at full price. `--no-journal` does the
+same on purpose.
+
+---
+
 ## Develop
 
-Requires Node >= 20.11 and pnpm 9.
+Requires Node >= 20.11 and pnpm 9. The journal additionally needs Node >= 22.5
+(`node:sqlite`); on anything older it turns itself off and the loop still works.
 
 ```bash
 pnpm install

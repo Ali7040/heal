@@ -26,6 +26,9 @@ importers:
       '@self-heal/fixer-noop':
         specifier: workspace:*
         version: link:packages/fixers/noop
+      '@self-heal/journal':
+        specifier: workspace:*
+        version: link:packages/journal
       '@self-heal/testkit':
         specifier: workspace:*
         version: link:packages/testkit
@@ -59,6 +62,9 @@ importers:
       '@self-heal/fixer-noop':
         specifier: workspace:*
         version: link:../fixers/noop
+      '@self-heal/journal':
+        specifier: workspace:*
+        version: link:../journal
 
   packages/core:
     devDependencies:
@@ -109,6 +115,10 @@ importers:
       '@self-heal/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@self-heal/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
   packages/testkit:
     dependencies:

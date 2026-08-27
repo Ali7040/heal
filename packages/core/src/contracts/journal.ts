@@ -21,9 +21,21 @@ export interface RecordedOutcome {
   readonly attempts: number;
 }
 
+/**
+ * One measurement, as it happened — a stored row plus how it came about.
+ *
+ * `replayed` is deliberately not part of `RecordedOutcome`: it is a fact about
+ * this attempt, not about the row. A journal cannot infer it either, because a
+ * signature verified twice looks identical whether the second fix was replayed
+ * for free or proposed at full price. Only the runner knows, so it says.
+ */
+export interface MeasuredOutcome extends RecordedOutcome {
+  readonly replayed: boolean;
+}
+
 export interface JournalPort {
   lookup(signature: string): Promise<RecordedOutcome | undefined>;
-  record(outcome: RecordedOutcome): Promise<void>;
+  record(outcome: MeasuredOutcome): Promise<void>;
 }
 
 export class NullJournal implements JournalPort {

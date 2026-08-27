@@ -1,12 +1,14 @@
 {
   "name": "@self-heal/cli",
   "version": "0.0.0",
-  "description": "Thin CLI — parses args, loads config, calls the runner. Phase 6.",
+  "description": "Thin CLI \u2014 parses args, loads config, calls the runner. Phase 6.",
   "type": "module",
   "bin": {
     "self-heal": "./dist/main.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build"
   },
@@ -14,6 +16,7 @@
     "@self-heal/core": "workspace:*",
     "@self-heal/detector-command": "workspace:*",
     "@self-heal/detector-contract": "workspace:*",
-    "@self-heal/fixer-noop": "workspace:*"
+    "@self-heal/fixer-noop": "workspace:*",
+    "@self-heal/journal": "workspace:*"
   }
 }

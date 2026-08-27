@@ -40,11 +40,21 @@ export interface Fixture {
   readonly defect: string;
 }
 
+/** What `self-heal init` writes. Kept here so fixtures behave like real projects. */
+export const IGNORED_ARTIFACTS = ['.self-heal/evidence/', '.self-heal/journal.sqlite', '.self-heal/journal.sqlite-*', ''].join(
+  '\n',
+);
+
 const PRICING_BUG: Fixture = {
   id: 'pricing-tax-ignored',
   description: 'A pure function accepts a tax rate and silently ignores it.',
   defect: 'totalWithTax() returns the pre-tax amount for every input.',
   files: {
+    // Run artifacts — the journal and evidence — are untracked, and an untracked
+    // file dirties the tree, which halts the *next* run (invariant 5). Exactly the
+    // entries `self-heal init` writes, and deliberately not all of `.self-heal/`:
+    // recorded contracts live there too and are meant to be committed.
+    '.gitignore': IGNORED_ARTIFACTS,
     'src/pricing.mjs': `export function totalWithTax(cents, rate) {
   // BUG: the tax rate is accepted and then ignored.
   return cents;
@@ -96,6 +106,7 @@ const ORDERS_CONTRACT_BUG: Fixture = {
   description: 'An API handler stops returning a field it has always returned.',
   defect: 'GET /api/orders omits `total` from every order. The response is still a valid 200.',
   files: {
+    '.gitignore': IGNORED_ARTIFACTS,
     'api.mjs': `import { createServer } from 'node:http';
 
 const PORT = Number(process.env.PORT ?? 8787);
