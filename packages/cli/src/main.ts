@@ -21,6 +21,7 @@ import { createConsoleLogger } from '@self-heal/core/logger';
 import { Runner, type IssueOutcome } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
 import { ContractDetector } from '@self-heal/detector-contract';
+import { VisualDetector } from '@self-heal/detector-visual';
 import { NoopFixer } from '@self-heal/fixer-noop';
 import { openJournal, UnsupportedRuntimeError, type Journal } from '@self-heal/journal/store';
 
@@ -98,10 +99,10 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
 
   const log = createConsoleLogger({ level: values['verbose'] === true ? 'debug' : 'info' });
 
-  // Two detector kinds, one list. The runner is handed `Detector[]` and cannot
+  // Three detector kinds, one list. The runner is handed `Detector[]` and cannot
   // tell which is which — that indistinguishability is the whole claim of the
   // plugin boundary, so it is worth noticing that this is the only place in the
-  // codebase where both kinds appear together.
+  // codebase where all three appear together.
   const detectors: Detector[] = [
     ...config.checks.map(
       (check) =>
@@ -114,6 +115,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
         }),
     ),
     ...(config.contracts === undefined ? [] : [buildContractDetector(config.contracts)]),
+    ...(config.visual === undefined ? [] : [buildVisualDetector(config.visual)]),
   ];
 
   // Opened before the runner so a broken journal is a startup failure with a
@@ -243,6 +245,18 @@ function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts'
   });
 }
 
+function buildVisualDetector(visual: NonNullable<SelfHealConfig['visual']>): VisualDetector {
+  return new VisualDetector({
+    id: visual.id,
+    views: visual.views.map((view) => ({ name: view.name, url: view.url, editable: view.editable })),
+    ...(visual.server !== undefined ? { server: visual.server } : {}),
+    ...(visual.baselineDir !== undefined ? { baselineDir: visual.baselineDir } : {}),
+    ...(visual.tolerance !== undefined ? { tolerance: visual.tolerance } : {}),
+    ...(visual.maxRatio !== undefined ? { maxRatio: visual.maxRatio } : {}),
+    ...(visual.record !== undefined ? { record: visual.record } : {}),
+  });
+}
+
 /**
  * Which files a fixer may edit for this issue.
  *
@@ -258,6 +272,13 @@ function editableFor(issue: Issue, config: SelfHealConfig): readonly string[] {
   if (config.contracts?.id === issue.detectorId) {
     const endpoint = config.contracts.endpoints.find((candidate) => candidate.name === issue.location.endpoint);
     if (endpoint !== undefined) return endpoint.editable;
+  }
+
+  if (config.visual?.id === issue.detectorId) {
+    // A visual issue carries its view name in `location.selector` — the frontend
+    // half of `IssueLocation`.
+    const view = config.visual.views.find((candidate) => candidate.name === issue.location.selector);
+    if (view !== undefined) return view.editable;
   }
 
   return config.allowlist;

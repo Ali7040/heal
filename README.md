@@ -27,9 +27,10 @@ read back out of git rather than parsed from what the model says it changed.
 pnpm build && pnpm demo        # dry run — nothing written, no model called
 pnpm build && pnpm demo:heal   # the real thing, using your agent harness
 
-pnpm demo --fixture orders-total-dropped --heal   # the API contract bug
-pnpm build && pnpm demo:journal                   # heal it, break it again, watch it replay
-pnpm demo --list                                  # every fixture
+pnpm demo --fixture orders-total-dropped --heal     # the API contract bug
+pnpm demo --fixture chart-colour-collision --heal   # the visual regression
+pnpm build && pnpm demo:journal                     # heal it, break it, watch it replay
+pnpm demo --list                                    # every fixture
 ```
 
 The second time it sees a bug, it does not ask a model:
@@ -41,14 +42,23 @@ The loop                            The same bug, a second time
                                       model calls this run: 0   total: 305ms
 ```
 
-Two detector kinds now run through the same unmodified engine — an exit code, and an
-API response compared against a recorded contract:
+Three kinds of measurement now run through the same unmodified engine:
+
+| Detector | Measures | Catches |
+|---|---|---|
+| `command` | an exit code | anything a test, linter, or type checker can fail on |
+| `contract` | a JSON response against a recorded shape | a field that quietly stopped being returned |
+| `visual` | pixels against an approved baseline | a picture that is simply wrong |
+
+The last two are regressions nothing else notices — a valid 200 response, a passing
+test suite, and the wrong output:
 
 ```
-   15234ms  HEALED
-
-- return orders.map(({ id, customer, currency })    => ({ id, customer, currency }));
+- return orders.map(({ id, customer, currency }) => ({ id, customer, currency }));
 + return orders.map(({ id, customer, total, currency }) => ({ id, customer, total, currency }));
+
+- refunds: [30, 120, 220],     // the revenue blue, pasted by mistake
++ refunds: [230, 160, 40],
 ```
 
 | Phase | Deliverable | State |
@@ -58,16 +68,19 @@ API response compared against a recorded contract:
 | 2 | Schema-drift detector | **done** — detects *and* heals a dropped API field |
 | 3 | Detected and fixed with no human | **done early** — the timeline above |
 | 4 | Journal | **done** — a repeat regression heals in 305ms for $0 |
-| 5 | Visual detector | stub — every method throws |
-| 6 | CLI + config + packaging | runs both detector kinds; ships the noop fixer |
+| 5 | Visual detector | **done** — a colour regression detected and healed |
+| 6 | CLI + config + packaging | runs all three detector kinds; ships the noop fixer |
 
-97 tests, no network, no model calls.
+124 tests, no network, no model calls.
 
 Phase 3 arrived early because phase 0 built the harness adapter as real code rather
 than as a throwaway spike, so wiring it in was a one-line swap. Phase 2 was the test
 of whether that boundary was real: a detector needing a running server, a recorded
 baseline, on-disk artifacts, and partial equality was added without the engine
 changing. `core` gained one primitive (`startProcess`) and no knowledge of HTTP.
+Phase 5 asked the harder version of the same question — does that second detector's
+shape generalise, or was it a coincidence? The engine needed nothing new at all;
+one helper moved *into* `core` because a second caller wanted it (D-014).
 
 ---
 
@@ -76,7 +89,7 @@ changing. `core` gained one primitive (`startProcess`) and no knowledge of HTTP.
 ```
 packages/
   core/         contracts, runner, safety, process + git — zero external deps
-  detectors/    command/ (exit codes) · contract/ (API schema) · visual/ (stub)
+  detectors/    command/ (exit codes) · contract/ (API schema) · visual/ (pixels)
   fixers/       harness/ (drives your agent CLI) · noop/ (dev + tests)
   journal/      SQLite outcome store — node:sqlite, zero deps
   testkit/      sandboxes, fixtures, servers, measurement — shared by everything
@@ -156,6 +169,32 @@ Backed by `node:sqlite`, so there is no native module to compile and no dependen
 to install — at the cost of needing Node 22.5+. On anything older the journal turns
 itself off with a message and the loop runs at full price. `--no-journal` does the
 same on purpose.
+
+---
+
+## Visual regressions
+
+A baseline is a PNG of a view that someone approved, recorded to
+`.self-heal/baselines/` and **committed**. Reviewing it in a pull request is the
+one moment human judgement enters the loop.
+
+```json
+{
+  "visual": {
+    "views": [{ "url": "http://127.0.0.1:3000/chart.png", "editable": ["src/chart/**"] }],
+    "server": { "command": "npm", "args": ["run", "dev"], "readyUrl": "http://127.0.0.1:3000/health" }
+  }
+}
+```
+
+Comparison uses two thresholds: `tolerance` (how different one pixel must be to
+count) absorbs antialiasing, and `maxRatio` (how much of the image may count)
+absorbs a cursor or a scrollbar. Byte equality would report a regression on every
+run of identical code.
+
+PNG decoding is hand-written on `node:zlib`, so there is no native image module to
+compile (D-015). Images come from a `Screenshotter` — a URL by default; a real
+browser via the optional Playwright adapter.
 
 ---
 

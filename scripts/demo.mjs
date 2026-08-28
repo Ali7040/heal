@@ -25,12 +25,13 @@ import { silentLogger } from '@self-heal/core/logger';
 import { Runner } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
 import { ContractDetector } from '@self-heal/detector-contract';
+import { VisualDetector } from '@self-heal/detector-visual';
 import { NoopFixer } from '@self-heal/fixer-noop';
 import { HarnessFixer } from '@self-heal/fixer-harness';
 import { Sandbox } from '@self-heal/testkit/sandbox';
 import { snapshotDir } from '@self-heal/testkit/snapshot';
 import { freePort } from '@self-heal/testkit/server';
-import { FIXTURES, getFixture } from '@self-heal/testkit/fixtures';
+import { CHART_FIXED_SOURCE, FIXTURES, getFixture } from '@self-heal/testkit/fixtures';
 import { openJournal } from '@self-heal/journal/store';
 
 const argv = process.argv.slice(2);
@@ -175,6 +176,37 @@ await sandbox.dispose();
 
 /** Detector selection is data-driven — the fixture's shape decides, not a flag. */
 async function buildDetector(fixture_) {
+  if (fixture_.serve !== undefined && fixture_.id === 'chart-colour-collision') {
+    const port = await freePort();
+    const base = `http://127.0.0.1:${port}`;
+    const server = {
+      command: process.execPath,
+      args: [fixture_.serve.entry],
+      readyUrl: `${base}${fixture_.serve.readyPath}`,
+      env: { PORT: String(port) },
+    };
+
+    // A visual baseline has to be recorded from a picture someone approved, so the
+    // sandbox starts healthy, records, and only then does the regression land.
+    // That is the real workflow, not a shortcut for the demo.
+    const detector = new VisualDetector({
+      id: 'chart-ui',
+      views: fixture_.serve.endpoints.map((endpoint) => ({
+        name: endpoint.name,
+        url: `${base}${endpoint.path}`,
+        editable: [...fixture_.editable],
+      })),
+      server,
+    });
+
+    await sandbox.write(fixture_.primary, CHART_FIXED_SOURCE);
+    await detector.detect(baselineCtx());
+    await sandbox.write(fixture_.primary, fixture_.files[fixture_.primary]);
+    await new GitRepo({ dir: sandbox.dir }).checkpoint('demo: the regression lands');
+
+    return { detector, describeMeasurement: 'measuring: rendered pixels vs an approved baseline' };
+  }
+
   if (fixture_.serve !== undefined) {
     const port = await freePort();
     const base = `http://127.0.0.1:${port}`;
@@ -208,6 +240,17 @@ async function buildDetector(fixture_) {
       kind: 'check-failed',
     }),
     describeMeasurement: 'measuring: exit code of the fixture check',
+  };
+}
+
+/** The context used only to record the first baseline, before the loop runs. */
+function baselineCtx() {
+  return {
+    repoRoot: sandbox.dir,
+    evidenceDir: `${sandbox.dir}/.self-heal/evidence`,
+    dryRun: false,
+    config: {},
+    log: silentLogger,
   };
 }
 

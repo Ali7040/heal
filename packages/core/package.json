@@ -4,25 +4,29 @@
   "description": "Contracts, state machine, and safety invariants for the self-healing loop. Depends on nothing.",
   "type": "module",
   "exports": {
-    "./contracts/issue": "./dist/contracts/issue.js",
-    "./contracts/detector": "./dist/contracts/detector.js",
-    "./contracts/fixer": "./dist/contracts/fixer.js",
-    "./contracts/diagnosis": "./dist/contracts/diagnosis.js",
-    "./contracts/patch": "./dist/contracts/patch.js",
     "./contracts/context": "./dist/contracts/context.js",
+    "./contracts/detector": "./dist/contracts/detector.js",
+    "./contracts/diagnosis": "./dist/contracts/diagnosis.js",
+    "./contracts/fixer": "./dist/contracts/fixer.js",
+    "./contracts/issue": "./dist/contracts/issue.js",
     "./contracts/journal": "./dist/contracts/journal.js",
-    "./runner/state": "./dist/runner/state.js",
-    "./runner/runner": "./dist/runner/runner.js",
+    "./contracts/patch": "./dist/contracts/patch.js",
     "./diagnosis/build": "./dist/diagnosis/build.js",
+    "./git/repo": "./dist/git/repo.js",
+    "./http": "./dist/http.js",
     "./logger": "./dist/logger.js",
-    "./safety/apply": "./dist/safety/apply.js",
-    "./safety/allowlist": "./dist/safety/allowlist.js",
-    "./safety/circuit-breaker": "./dist/safety/circuit-breaker.js",
-    "./signature": "./dist/signature.js",
     "./process": "./dist/process.js",
-    "./git/repo": "./dist/git/repo.js"
+    "./runner/runner": "./dist/runner/runner.js",
+    "./runner/state": "./dist/runner/state.js",
+    "./safety/allowlist": "./dist/safety/allowlist.js",
+    "./safety/apply": "./dist/safety/apply.js",
+    "./safety/circuit-breaker": "./dist/safety/circuit-breaker.js",
+    "./server": "./dist/server.js",
+    "./signature": "./dist/signature.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build"
   },

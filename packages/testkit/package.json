@@ -9,7 +9,8 @@
     "./snapshot": "./dist/snapshot.js",
     "./fixtures": "./dist/fixtures.js",
     "./measure": "./dist/measure.js",
-    "./server": "./dist/server.js"
+    "./server": "./dist/server.js",
+    "./artifacts": "./dist/artifacts.js"
   },
   "scripts": {
     "build": "tsc --build"

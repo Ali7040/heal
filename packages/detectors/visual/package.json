@@ -1,16 +1,24 @@
 {
   "name": "@self-heal/detector-visual",
   "version": "0.0.0",
-  "description": "Detects visual regressions via Playwright and pixel diffing. Phase 5.",
+  "description": "Detects visual regressions by comparing an image against a recorded baseline. Zero dependencies.",
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./png": "./dist/png.js",
+    "./compare": "./dist/compare.js",
+    "./capture": "./dist/capture.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build"
   },
   "dependencies": {
     "@self-heal/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@self-heal/testkit": "workspace:*"
   }
 }

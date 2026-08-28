@@ -7,11 +7,11 @@
     ".": "./dist/index.js",
     "./shape": "./dist/shape.js",
     "./diff": "./dist/diff.js",
-    "./probe": "./dist/probe.js",
-    "./baseline": "./dist/baseline.js",
-    "./server": "./dist/server.js"
+    "./baseline": "./dist/baseline.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build"
   },

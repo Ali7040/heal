@@ -15,10 +15,15 @@
  * grow one: "what has to be true before I can measure this" is knowledge the
  * detector owns. A compiled project would put its build step here for the same
  * reason.
+ *
+ * It sits in `core` as a primitive, not as a policy: `core` offers "run something
+ * while this is alive" the same way it offers `runCommand`, and every decision
+ * about *whether* to boot, and what counts as ready, stays with the detector that
+ * called it. It moved here the moment a second detector needed it (D-014).
  */
-import { startProcess } from '@self-heal/core/process';
+import { startProcess } from './process.js';
 
-import { waitForReady } from './probe.js';
+import { waitForReady } from './http.js';
 
 export interface ServerConfig {
   readonly command: string;

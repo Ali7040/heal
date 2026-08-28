@@ -24,15 +24,15 @@ import { computeSignature } from '@self-heal/core/signature';
 
 import { DEFAULT_CONTRACTS_DIR, readBaseline, slug, writeBaseline, type Baseline } from './baseline.js';
 import { diffShapes, type Drift } from './diff.js';
-import { probe, type ProbeResult } from './probe.js';
+import { probe, type ProbeResult } from '@self-heal/core/http';
 import { describeShape } from './shape.js';
-import { withServer, type ServerConfig } from './server.js';
+import { withServer, type ServerConfig } from '@self-heal/core/server';
 
 export { describeShape, type ShapeMap, type ShapeEntry } from './shape.js';
 export { diffShapes, formatDrifts, type Drift, type DriftKind } from './diff.js';
-export { probe, waitForReady, type ProbeResult } from './probe.js';
+export { probe, waitForReady, type ProbeResult } from '@self-heal/core/http';
 export { readBaseline, writeBaseline, pathFor, DEFAULT_CONTRACTS_DIR, type Baseline } from './baseline.js';
-export { withServer, ServerStartError, type ServerConfig } from './server.js';
+export { withServer, ServerStartError, type ServerConfig } from '@self-heal/core/server';
 
 export interface EndpointConfig {
   /** Stable name — the contract filename and the issue's location. */

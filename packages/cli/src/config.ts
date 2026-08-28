@@ -39,21 +39,42 @@ export interface EndpointConfigInput {
 export interface ContractsConfig {
   readonly id: string;
   readonly endpoints: readonly EndpointConfigInput[];
-  readonly server?: {
-    readonly command: string;
-    readonly args: readonly string[];
-    readonly readyUrl: string;
-    readonly readyTimeoutMs?: number;
-  };
+  readonly server?: ServerConfigInput;
   readonly contractsDir?: string;
   readonly strict?: boolean;
   readonly record?: 'missing' | 'never';
+}
+
+/** One view under visual regression. */
+export interface ViewConfigInput {
+  readonly name: string;
+  readonly url: string;
+  readonly editable: readonly string[];
+}
+
+/** The pixel half of the config. Shares `server` for the same reason contracts do. */
+export interface VisualConfig {
+  readonly id: string;
+  readonly views: readonly ViewConfigInput[];
+  readonly server?: ServerConfigInput;
+  readonly baselineDir?: string;
+  readonly tolerance?: number;
+  readonly maxRatio?: number;
+  readonly record?: 'missing' | 'never';
+}
+
+export interface ServerConfigInput {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly readyUrl: string;
+  readonly readyTimeoutMs?: number;
 }
 
 export interface SelfHealConfig {
   readonly repoRoot: string;
   readonly checks: readonly CheckConfig[];
   readonly contracts?: ContractsConfig;
+  readonly visual?: VisualConfig;
   /** Globs a patch may touch, repo-relative. */
   readonly allowlist: readonly string[];
   readonly harness: string;
@@ -102,10 +123,11 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
 
   const checks = Array.isArray(record['checks']) ? record['checks'] : [];
   const contracts = validateContracts(record['contracts']);
-  // Either kind of detector is enough on its own; neither is not.
-  if (checks.length === 0 && contracts === undefined) {
+  const visual = validateVisual(record['visual']);
+  // Any one kind of detector is enough on its own; none is not.
+  if (checks.length === 0 && contracts === undefined && visual === undefined) {
     throw new ConfigError(
-      'config needs at least one detector: a non-empty `checks` array, `contracts.endpoints`, or both.',
+      'config needs at least one detector: a non-empty `checks` array, `contracts.endpoints`, `visual.views`, or any combination.',
     );
   }
 
@@ -121,6 +143,7 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
     repoRoot: typeof record['repoRoot'] === 'string' ? resolve(cwd, record['repoRoot']) : cwd,
     checks: checks.map((check, index) => validateCheck(check, index)),
     ...(contracts !== undefined ? { contracts } : {}),
+    ...(visual !== undefined ? { visual } : {}),
     allowlist: allowlist.map(String),
     harness: typeof record['harness'] === 'string' ? record['harness'] : DEFAULTS.harness,
     attemptCap: typeof record['attemptCap'] === 'number' ? record['attemptCap'] : DEFAULTS.attemptCap,
@@ -200,6 +223,79 @@ function validateContracts(input: unknown): ContractsConfig | undefined {
     ...(typeof record['contractsDir'] === 'string' ? { contractsDir: record['contractsDir'] } : {}),
     ...(record['strict'] === true ? { strict: true } : {}),
     ...(record_ !== undefined ? { record: record_ } : {}),
+  };
+}
+
+function validateVisual(input: unknown): VisualConfig | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input !== 'object') throw new ConfigError('config.visual must be an object');
+  const record = input as Record<string, unknown>;
+
+  const views = record['views'];
+  if (!Array.isArray(views) || views.length === 0) {
+    throw new ConfigError('config.visual.views must be a non-empty array');
+  }
+
+  const record_ = record['record'];
+  if (record_ !== undefined && record_ !== 'missing' && record_ !== 'never') {
+    throw new ConfigError('config.visual.record must be "missing" or "never"');
+  }
+
+  const server = validateServer(record['server'], 'config.visual.server');
+
+  return {
+    id: typeof record['id'] === 'string' ? record['id'] : 'visual',
+    views: views.map((view, index) => validateView(view, index)),
+    ...(server !== undefined ? { server } : {}),
+    ...(typeof record['baselineDir'] === 'string' ? { baselineDir: record['baselineDir'] } : {}),
+    ...(typeof record['tolerance'] === 'number' ? { tolerance: record['tolerance'] } : {}),
+    ...(typeof record['maxRatio'] === 'number' ? { maxRatio: record['maxRatio'] } : {}),
+    ...(record_ !== undefined ? { record: record_ } : {}),
+  };
+}
+
+function validateView(input: unknown, index: number): ViewConfigInput {
+  if (typeof input !== 'object' || input === null) {
+    throw new ConfigError(`config.visual.views[${index}] must be an object`);
+  }
+  const record = input as Record<string, unknown>;
+
+  const url = record['url'];
+  if (typeof url !== 'string' || url === '') {
+    throw new ConfigError(`config.visual.views[${index}].url is required — it is where the image comes from`);
+  }
+
+  const editable = Array.isArray(record['editable']) ? record['editable'].map(String) : [];
+  if (editable.length === 0) {
+    throw new ConfigError(
+      `config.visual.views[${index}].editable is required — a fixer needs to know which files render this view`,
+    );
+  }
+
+  return {
+    // The name is the baseline's filename and the issue's identity, so it must
+    // survive a change of host. Defaulting to the path keeps a recorded baseline
+    // valid whether it was captured against localhost or staging.
+    name: typeof record['name'] === 'string' ? record['name'] : pathOf(url),
+    url,
+    editable,
+  };
+}
+
+function validateServer(input: unknown, label: string): ServerConfigInput | undefined {
+  if (input === undefined || input === null) return undefined;
+  const record = input as Record<string, unknown>;
+  if (typeof record['command'] !== 'string' || typeof record['readyUrl'] !== 'string') {
+    throw new ConfigError(
+      `${label} needs \`command\` and \`readyUrl\`.\n` +
+        '`readyUrl` is polled until it answers — without it, measuring races the server startup.',
+    );
+  }
+  return {
+    command: record['command'],
+    args: Array.isArray(record['args']) ? record['args'].map(String) : [],
+    readyUrl: record['readyUrl'],
+    ...(typeof record['readyTimeoutMs'] === 'number' ? { readyTimeoutMs: record['readyTimeoutMs'] } : {}),
   };
 }
 

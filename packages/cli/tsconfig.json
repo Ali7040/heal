@@ -9,6 +9,7 @@
     { "path": "../core" },
     { "path": "../detectors/command" },
     { "path": "../detectors/contract" },
+    { "path": "../detectors/visual" },
     { "path": "../journal" },
     { "path": "../fixers/noop" }
   ]

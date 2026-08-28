@@ -12,6 +12,12 @@
  * harness, script, and test can use it immediately — `scripts/demo.mjs` picks its
  * detector from the fixture's shape rather than from a flag.
  */
+import { IGNORED_ARTIFACTS } from './artifacts.js';
+import { CHART_COLOUR_BUG } from './fixtures/chart-colour.js';
+
+export { IGNORED_ARTIFACTS } from './artifacts.js';
+export { CHART_COLOUR_BUG, CHART_FIXED_SOURCE } from './fixtures/chart-colour.js';
+
 export interface Fixture {
   readonly id: string;
   readonly description: string;
@@ -39,11 +45,6 @@ export interface Fixture {
   /** Human-readable statement of the defect, for prompts and reports. */
   readonly defect: string;
 }
-
-/** What `self-heal init` writes. Kept here so fixtures behave like real projects. */
-export const IGNORED_ARTIFACTS = ['.self-heal/evidence/', '.self-heal/journal.sqlite', '.self-heal/journal.sqlite-*', ''].join(
-  '\n',
-);
 
 const PRICING_BUG: Fixture = {
   id: 'pricing-tax-ignored',
@@ -166,6 +167,7 @@ createServer((req, res) => {
 export const FIXTURES: Readonly<Record<string, Fixture>> = {
   [PRICING_BUG.id]: PRICING_BUG,
   [ORDERS_CONTRACT_BUG.id]: ORDERS_CONTRACT_BUG,
+  [CHART_COLOUR_BUG.id]: CHART_COLOUR_BUG,
 };
 
 export function getFixture(id: string): Fixture {
