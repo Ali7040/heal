@@ -13,6 +13,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import type { Detector } from '@self-heal/core/contracts/detector';
+import type { Fixer } from '@self-heal/core/contracts/fixer';
 import type { RunContext } from '@self-heal/core/contracts/context';
 import type { Issue } from '@self-heal/core/contracts/issue';
 import { buildDiagnosis } from '@self-heal/core/diagnosis/build';
@@ -22,6 +23,7 @@ import { Runner, type IssueOutcome } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
 import { ContractDetector } from '@self-heal/detector-contract';
 import { VisualDetector } from '@self-heal/detector-visual';
+import { HarnessFixer, createGitWorkspace } from '@self-heal/fixer-harness';
 import { NoopFixer } from '@self-heal/fixer-noop';
 import { openJournal, UnsupportedRuntimeError, type Journal } from '@self-heal/journal/store';
 
@@ -43,6 +45,9 @@ Options:
   --json         Emit the run report as JSON on stdout.
   --no-journal   Do not consult or update the outcome journal. Every occurrence
                  of a known regression then pays for a fresh model call.
+  --fixer        "harness" (default) drives the agent CLI you already have
+                 installed. "noop" proposes nothing — the loop still detects,
+                 diagnoses, and reports, for free. --dry-run implies "noop".
 `;
 
 export async function main(argv: readonly string[]): Promise<number> {
@@ -55,6 +60,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       verbose: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       journal: { type: 'boolean', default: true },
+      fixer: { type: 'string', default: 'harness' },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -132,10 +138,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
 
   const runner = new Runner({
     detectors,
-    // Phase 1 ships with the fixer that proposes nothing, so the loop can be run
-    // end to end for free. The harness fixer is a one-line swap here — that it is
-    // one line is the evidence the `Fixer` boundary was drawn in the right place.
-    fixer: new NoopFixer(),
+    fixer: buildFixer(values, config, dryRun),
     repo: new GitRepo({ dir: config.repoRoot }),
     ctx,
     // Absent means `NullJournal` — the runner has no "journal disabled" branch,
@@ -242,6 +245,35 @@ function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts'
     ...(contracts.contractsDir !== undefined ? { contractsDir: contracts.contractsDir } : {}),
     ...(contracts.strict === true ? { strict: true } : {}),
     ...(contracts.record !== undefined ? { record: contracts.record } : {}),
+  });
+}
+
+/**
+ * Which fixer this run gets.
+ *
+ * A dry run never reaches `APPLYING`, so a fixer that costs money there would be
+ * spending it to produce a patch nobody applies. `--dry-run` therefore implies
+ * the noop fixer, which keeps the promise of the flag literal: nothing written,
+ * nothing spent.
+ *
+ * Everything else defaults to the real harness. Shipping the noop fixer as the
+ * default made `self-heal run` a command that detected problems and then did
+ * nothing about them — the loop existed, but only the demo could close it.
+ */
+function buildFixer(values: Record<string, unknown>, config: SelfHealConfig, dryRun: boolean): Fixer {
+  if (dryRun || values['fixer'] === 'noop') return new NoopFixer();
+
+  const requested = values['fixer'];
+  if (requested !== 'harness') {
+    throw new ConfigError(`unknown --fixer "${String(requested)}". Use "harness" or "noop".`);
+  }
+
+  return new HarnessFixer({
+    harness: config.harness,
+    // The harness edits a copy in the OS temp directory, never the user's tree.
+    // It is built per proposal and destroyed afterwards, so nothing a model does
+    // outlives the attempt that did it.
+    createWorkspace: () => createGitWorkspace({ repoRoot: config.repoRoot }),
   });
 }
 

@@ -11,6 +11,7 @@
     { "path": "../detectors/contract" },
     { "path": "../detectors/visual" },
     { "path": "../journal" },
+    { "path": "../fixers/harness" },
     { "path": "../fixers/noop" }
   ]
 }

@@ -69,9 +69,9 @@ test suite, and the wrong output:
 | 3 | Detected and fixed with no human | **done early** — the timeline above |
 | 4 | Journal | **done** — a repeat regression heals in 305ms for $0 |
 | 5 | Visual detector | **done** — a colour regression detected and healed |
-| 6 | CLI + config + packaging | runs all three detector kinds; ships the noop fixer |
+| 6 | CLI + config + packaging | **done** — `self-heal run` heals a real repo |
 
-124 tests, no network, no model calls.
+131 tests, no network, no model calls.
 
 Phase 3 arrived early because phase 0 built the harness adapter as real code rather
 than as a throwaway spike, so wiring it in was a one-line swap. Phase 2 was the test
@@ -81,6 +81,26 @@ changing. `core` gained one primitive (`startProcess`) and no knowledge of HTTP.
 Phase 5 asked the harder version of the same question — does that second detector's
 shape generalise, or was it a coincidence? The engine needed nothing new at all;
 one helper moved *into* `core` because a second caller wanted it (D-014).
+
+---
+
+## Use it
+
+```bash
+self-heal init          # writes a config and gitignores run artifacts
+self-heal run --dry-run # detect, diagnose, propose — nothing written, nothing spent
+self-heal run           # the real thing
+```
+
+`run` drives the agent harness you already have installed, so it costs whatever
+your harness costs. `--dry-run` and `--fixer noop` are free, and detect and report
+exactly the same issues.
+
+Every proposal happens in a copy of your repository in the OS temp directory,
+built from `git ls-files` — so your `.gitignore` decides what a model can see, and
+nothing it does outlives the attempt. A checkpoint commit precedes every write, a
+dirty tree stops the run, and `HEALED` still means only one thing: the check that
+found the problem passes now.
 
 ---
 

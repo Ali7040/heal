@@ -7,9 +7,12 @@
     ".": "./dist/index.js",
     "./profiles": "./dist/profiles.js",
     "./invoke": "./dist/invoke.js",
-    "./capture": "./dist/capture.js"
+    "./capture": "./dist/capture.js",
+    "./workspace": "./dist/workspace.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build"
   },

@@ -16,8 +16,9 @@
     "@self-heal/core": "workspace:*",
     "@self-heal/detector-command": "workspace:*",
     "@self-heal/detector-contract": "workspace:*",
+    "@self-heal/detector-visual": "workspace:*",
+    "@self-heal/fixer-harness": "workspace:*",
     "@self-heal/fixer-noop": "workspace:*",
-    "@self-heal/journal": "workspace:*",
-    "@self-heal/detector-visual": "workspace:*"
+    "@self-heal/journal": "workspace:*"
   }
 }

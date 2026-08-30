@@ -27,6 +27,7 @@ import { getProfile, type HarnessProfile } from './profiles.js';
 export { capturePatch } from './capture.js';
 export { invokeHarness, DEFAULT_HARNESS_TIMEOUT_MS } from './invoke.js';
 export { getProfile, HARNESS_PROFILES, DEFAULT_ALLOW_TOOLS, DEFAULT_DENY_TOOLS } from './profiles.js';
+export { createGitWorkspace, WorkspaceError, DEFAULT_MAX_FILE_BYTES } from './workspace.js';
 
 export interface HarnessFixerOptions {
   /** Profile id (`claude-code`) or a fully custom profile from user config. */

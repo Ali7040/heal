@@ -65,6 +65,9 @@ importers:
       '@self-heal/detector-visual':
         specifier: workspace:*
         version: link:../detectors/visual
+      '@self-heal/fixer-harness':
+        specifier: workspace:*
+        version: link:../fixers/harness
       '@self-heal/fixer-noop':
         specifier: workspace:*
         version: link:../fixers/noop
