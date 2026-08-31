@@ -1,0 +1,88 @@
+# The project's claim is that the deterministic layer measures everything. Not
+# running its own measurements on every push would be a poor look.
+#
+# Windows is in the matrix rather than as an afterthought: the two worst bugs in
+# this repository's history were both Windows command-line re-parsing, and both
+# were invisible on Linux. A green Ubuntu run would have missed each of them.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push supersedes the first. Cancelling the older run is safe here
+# because nothing deploys — the only output is a verdict.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: '22.x'
+          - os: windows-latest
+            node: '22.x'
+          - os: ubuntu-latest
+            node: '24.x'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # No version here on purpose: it comes from `packageManager` in
+          # package.json, so CI and a developer's machine cannot drift apart.
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: build
+        run: pnpm build
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - name: lint
+        run: pnpm lint
+
+      # The suite makes no network calls and no model calls, so it needs no
+      # secrets and cannot fail for reasons outside this repository.
+      - name: test
+        run: pnpm test
+
+  # The journal needs node:sqlite (Node >= 22.5) and is supposed to degrade to
+  # "no memory, full price" on anything older rather than crash. This job is that
+  # promise, checked — the CLI has to start and report on a runtime where the
+  # journal cannot be opened at all.
+  older-node:
+    name: ubuntu · node 20 (journal disabled)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.11'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: the CLI still runs without a journal
+        run: node packages/cli/dist/main.js --help
