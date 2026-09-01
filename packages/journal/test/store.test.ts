@@ -160,3 +160,64 @@ describe('openJournal', () => {
     await expect(openJournal(path)).rejects.toThrow(/version/i);
   });
 });
+
+/**
+ * Reading the journal back is what makes a surprising replay explainable. These
+ * assertions are about what a person sees, not about SQL.
+ */
+describe('inspecting a journal', () => {
+  it('lists most-recently-seen first, without the patch bodies', async () => {
+    const { journal } = await journalIn();
+    await journal.record({ signature: 'aaa1', kind: 'check-failed', patch: patch('a'), verified: true, attempts: 1, replayed: false });
+    await journal.record({ signature: 'bbb2', kind: 'schema-mismatch', patch: patch('b'), verified: false, attempts: 2, replayed: false });
+
+    const entries = journal.list();
+    expect(entries.map((entry) => entry.signature)).toEqual(['bbb2', 'aaa1']);
+    expect(entries[0]?.files).toEqual(['src/pricing.mjs']);
+    // Whole file contents in a terminal answer a different question badly.
+    expect(JSON.stringify(entries)).not.toContain('fixed');
+  });
+
+  it('honours a limit', async () => {
+    const { journal } = await journalIn();
+    for (const signature of ['a', 'b', 'c']) {
+      await journal.record({ signature, kind: 'check-failed', patch: patch('x'), verified: true, attempts: 1, replayed: false });
+    }
+    expect(journal.list(2)).toHaveLength(2);
+  });
+
+  it('forgets an outcome by its full signature', async () => {
+    const { journal } = await journalIn();
+    await journal.record({ signature: 'abcdef123456', kind: 'check-failed', patch: patch('a'), verified: true, attempts: 1, replayed: false });
+
+    expect(journal.forget('abcdef123456')).toEqual({ status: 'forgotten', signature: 'abcdef123456' });
+    expect(await journal.lookup('abcdef123456')).toBeUndefined();
+  });
+
+  it('forgets by the short signature every other surface prints', async () => {
+    const { journal } = await journalIn();
+    await journal.record({ signature: 'abcdef123456', kind: 'check-failed', patch: patch('a'), verified: true, attempts: 1, replayed: false });
+
+    // The run report and the listing both show eight characters. Printing a
+    // short id and demanding the long one is a cruelty that shows up the first
+    // time anyone tries it.
+    expect(journal.forget('abcdef12')).toEqual({ status: 'forgotten', signature: 'abcdef123456' });
+  });
+
+  it('refuses an ambiguous prefix rather than deleting the wrong fix', async () => {
+    const { journal } = await journalIn();
+    for (const signature of ['abc111', 'abc222']) {
+      await journal.record({ signature, kind: 'check-failed', patch: patch('a'), verified: true, attempts: 1, replayed: false });
+    }
+
+    // Deleting the wrong remembered fix is silent: the next run just pays for a
+    // proposal nobody expected.
+    expect(journal.forget('abc')).toEqual({ status: 'ambiguous', matches: ['abc111', 'abc222'] });
+    expect(journal.stats().total).toBe(2);
+  });
+
+  it('says so when nothing matches', async () => {
+    const { journal } = await journalIn();
+    expect(journal.forget('nothing')).toEqual({ status: 'not-found' });
+  });
+});

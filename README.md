@@ -1,5 +1,7 @@
 # self-heal
 
+[![ci](https://github.com/Ali7040/heal/actions/workflows/ci.yml/badge.svg)](https://github.com/Ali7040/heal/actions/workflows/ci.yml)
+
 A closed-loop agent that **detects** regressions with deterministic code, **proposes**
 a fix through the agent harness you already have installed, **verifies** the fix by
 re-running the original detection, and **records** the measured outcome.
@@ -71,7 +73,9 @@ test suite, and the wrong output:
 | 5 | Visual detector | **done** — a colour regression detected and healed |
 | 6 | CLI + config + packaging | **done** — `self-heal run` heals a real repo |
 
-131 tests, no network, no model calls.
+137 tests on Linux and Windows, no network, no model calls. Windows is in CI
+rather than an afterthought: the two worst bugs in this repository's history were
+both `cmd.exe` re-parsing a command line, and both were invisible on Linux.
 
 Phase 3 arrived early because phase 0 built the harness adapter as real code rather
 than as a throwaway spike, so wiring it in was a one-line swap. Phase 2 was the test
@@ -90,6 +94,7 @@ one helper moved *into* `core` because a second caller wanted it (D-014).
 self-heal init          # writes a config and gitignores run artifacts
 self-heal run --dry-run # detect, diagnose, propose — nothing written, nothing spent
 self-heal run           # the real thing
+self-heal journal       # what it remembers, and what that has saved
 ```
 
 `run` drives the agent harness you already have installed, so it costs whatever
@@ -189,6 +194,14 @@ Backed by `node:sqlite`, so there is no native module to compile and no dependen
 to install — at the cost of needing Node 22.5+. On anything older the journal turns
 itself off with a message and the loop runs at full price. `--no-journal` does the
 same on purpose.
+
+```bash
+self-heal journal                   # ✔ fa0f950f  check-failed  src/pricing.mjs
+self-heal journal --forget fa0f950f # stop offering that one; propose fresh instead
+```
+
+`--forget` takes the short signature the listing prints, and refuses an ambiguous
+prefix rather than deleting the wrong remembered fix.
 
 ---
 

@@ -32,8 +32,9 @@ import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './
 const USAGE = `self-heal — detect, propose, verify, record
 
 Usage:
-  self-heal run  [--dry-run] [--config <path>] [--allow-dirty] [--verbose]
-  self-heal init [--config <path>]
+  self-heal run     [--dry-run] [--config <path>] [--allow-dirty] [--verbose]
+  self-heal init    [--config <path>]
+  self-heal journal [--limit <n>] [--forget <signature>] [--json]
 
 Options:
   --dry-run      Detect, diagnose, and propose — then stop and print the patch.
@@ -45,6 +46,9 @@ Options:
   --json         Emit the run report as JSON on stdout.
   --no-journal   Do not consult or update the outcome journal. Every occurrence
                  of a known regression then pays for a fresh model call.
+  --limit        journal: how many remembered outcomes to show (default 20).
+  --forget       journal: delete one outcome by signature, so the next
+                 occurrence is proposed fresh instead of replayed.
   --fixer        "harness" (default) drives the agent CLI you already have
                  installed. "noop" proposes nothing — the loop still detects,
                  diagnoses, and reports, for free. --dry-run implies "noop".
@@ -61,6 +65,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       json: { type: 'boolean', default: false },
       journal: { type: 'boolean', default: true },
       fixer: { type: 'string', default: 'harness' },
+      limit: { type: 'string', default: '20' },
+      forget: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -84,6 +90,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       }
       case 'run':
         return await runCommand_(values, cwd);
+      case 'journal':
+        return await journalCommand(values, cwd);
       default:
         process.stderr.write(`unknown command: ${positionals[0]}\n\n${USAGE}`);
         return 1;
@@ -246,6 +254,72 @@ function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts'
     ...(contracts.strict === true ? { strict: true } : {}),
     ...(contracts.record !== undefined ? { record: contracts.record } : {}),
   });
+}
+
+/**
+ * Show what the journal remembers, or forget one row.
+ *
+ * The first thing anyone wants after a surprising replay is to see the record
+ * that caused it — and, occasionally, to remove it. Without this the only window
+ * into the store was a summary line at the end of a run, which is enough to know
+ * something was replayed and not enough to know what.
+ */
+async function journalCommand(values: Record<string, unknown>, cwd: string): Promise<number> {
+  const config = await loadConfig(values['config'] as string, cwd);
+  const log = createConsoleLogger({ level: 'warn' });
+  const journal = await openJournalOrExplain(config, log);
+  if (journal === undefined) return 4;
+
+  const out = (line: string) => process.stdout.write(`${line}\n`);
+
+  try {
+    const forget = values['forget'];
+    if (typeof forget === 'string' && forget !== '') {
+      const result = journal.forget(forget);
+      if (result.status === 'forgotten') {
+        out(`forgot ${result.signature}`);
+        return 0;
+      }
+      if (result.status === 'ambiguous') {
+        // Deleting the wrong remembered fix would be silent, and the next run
+        // would quietly pay for a proposal nobody expected.
+        out(`"${forget}" matches ${result.matches.length} outcomes:`);
+        for (const match of result.matches) out(`  ${match}`);
+        return 1;
+      }
+      out(`no outcome matching "${forget}"`);
+      return 1;
+    }
+
+    const limit = Number.parseInt(String(values['limit'] ?? '20'), 10);
+    const entries = journal.list(Number.isFinite(limit) && limit > 0 ? limit : 20);
+    const stats = journal.stats();
+
+    if (values['json'] === true) {
+      out(JSON.stringify({ stats, entries }, null, 2));
+      return 0;
+    }
+
+    if (entries.length === 0) {
+      out('journal is empty — nothing has been measured yet');
+      return 0;
+    }
+
+    for (const entry of entries) {
+      // `verified` is the only column that decides whether a row is ever offered
+      // again, so it leads.
+      const mark = entry.verified ? '✔' : '✗';
+      const replays = entry.replays > 0 ? `  ${entry.replays} replay(s)` : '';
+      const files = entry.files.join(', ') || '(no files)';
+      out(`${mark} ${entry.signature.slice(0, 8)}  ${entry.kind.padEnd(18)} ${files}${replays}`);
+      out(`  first seen ${entry.firstSeen}   last seen ${entry.lastSeen}`);
+    }
+
+    out(`\n${stats.total} remembered, ${stats.verified} verified, ${stats.replays} model call(s) skipped so far`);
+    return 0;
+  } finally {
+    journal.close();
+  }
 }
 
 /**

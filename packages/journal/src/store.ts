@@ -56,11 +56,50 @@ export interface JournalStats {
   readonly replays: number;
 }
 
+/**
+ * One remembered outcome, as a person would want to read it.
+ *
+ * Deliberately without the patch body. Listing what is remembered is a question
+ * about *which* fixes are held and how they have behaved, and dumping whole file
+ * contents into a terminal answers a different question badly.
+ */
+export interface JournalEntry {
+  readonly signature: string;
+  readonly kind: string;
+  readonly verified: boolean;
+  readonly attempts: number;
+  readonly replays: number;
+  readonly files: readonly string[];
+  readonly firstSeen: string;
+  readonly lastSeen: string;
+}
+
 /** Implements the port `core` declares, so the runner never learns SQLite exists. */
 export interface Journal extends JournalPort {
   stats(): JournalStats;
+  /** Most recently seen first — the order anyone investigating actually wants. */
+  list(limit?: number): JournalEntry[];
+  /**
+   * Forget one outcome, by signature or by an unambiguous prefix of one.
+   *
+   * The escape hatch for a replay that keeps being offered and keeps being
+   * wrong. It is a deletion rather than a "never replay this" flag on purpose:
+   * the journal is a record of measurements, and a permanent veto stored beside
+   * them would be an opinion, which is the one thing this table does not hold.
+   *
+   * Prefixes are accepted because every other surface — the run report, the
+   * listing — shows eight characters. Printing a short id and then demanding the
+   * long one is a small cruelty that shows up the first time anyone tries it.
+   */
+  forget(signature: string): ForgetResult;
   close(): void;
 }
+
+/** Ambiguity is a distinct outcome: deleting the wrong remembered fix is silent. */
+export type ForgetResult =
+  | { readonly status: 'forgotten'; readonly signature: string }
+  | { readonly status: 'not-found' }
+  | { readonly status: 'ambiguous'; readonly matches: readonly string[] };
 
 export async function openJournal(path: string, options: JournalOptions = {}): Promise<Journal> {
   const { DatabaseSync } = await loadSqlite();
@@ -125,6 +164,41 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
         // failed cost one, and a fresh proposal was never free to begin with.
         saved: outcome.replayed && outcome.verified ? 1 : 0,
       });
+    },
+
+    list(limit = 20): JournalEntry[] {
+      const rows = db
+        .prepare('SELECT * FROM outcomes ORDER BY last_seen DESC LIMIT ?')
+        .all(limit) as unknown as OutcomeRow[];
+
+      return rows.map((row) => {
+        const patch = parsePatch(row.patch);
+        return {
+          signature: row.signature,
+          kind: row.kind,
+          verified: row.verified === 1,
+          attempts: row.attempts,
+          replays: row.replays,
+          files: patch?.edits.map((edit) => edit.path) ?? [],
+          firstSeen: row.first_seen,
+          lastSeen: row.last_seen,
+        };
+      });
+    },
+
+    forget(signature: string): ForgetResult {
+      const matches = (
+        db.prepare('SELECT signature FROM outcomes WHERE signature LIKE ? ORDER BY signature').all(`${signature}%`) as {
+          signature: string;
+        }[]
+      ).map((row) => row.signature);
+
+      if (matches.length === 0) return { status: 'not-found' };
+      if (matches.length > 1) return { status: 'ambiguous', matches };
+
+      const exact = matches[0] as string;
+      db.prepare('DELETE FROM outcomes WHERE signature = ?').run(exact);
+      return { status: 'forgotten', signature: exact };
     },
 
     stats(): JournalStats {
