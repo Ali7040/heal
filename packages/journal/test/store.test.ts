@@ -167,6 +167,8 @@ describe('openJournal', () => {
  */
 describe('inspecting a journal', () => {
   it('lists most-recently-seen first, without the patch bodies', async () => {
+    // Both records land in the same millisecond on a fast machine, so this also
+    // pins the tie-break. Without one, the order is whatever SQLite feels like.
     const { journal } = await journalIn();
     await journal.record({ signature: 'aaa1', kind: 'check-failed', patch: patch('a'), verified: true, attempts: 1, replayed: false });
     await journal.record({ signature: 'bbb2', kind: 'schema-mismatch', patch: patch('b'), verified: false, attempts: 2, replayed: false });

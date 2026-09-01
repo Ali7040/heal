@@ -167,8 +167,12 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
     },
 
     list(limit = 20): JournalEntry[] {
+      // `rowid` breaks the tie, and the tie is not hypothetical: two outcomes
+      // recorded in the same millisecond share a `last_seen` to the millisecond,
+      // and SQLite is then free to return them in any order. Without this the
+      // listing is unstable exactly when a run heals several issues at once.
       const rows = db
-        .prepare('SELECT * FROM outcomes ORDER BY last_seen DESC LIMIT ?')
+        .prepare('SELECT * FROM outcomes ORDER BY last_seen DESC, rowid DESC LIMIT ?')
         .all(limit) as unknown as OutcomeRow[];
 
       return rows.map((row) => {
