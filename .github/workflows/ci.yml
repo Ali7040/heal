@@ -64,6 +64,32 @@ jobs:
       - name: test
         run: pnpm test
 
+  # Packing is the one step whose output nobody tests by using it: the workspace
+  # keeps working long after `files` or an export map has stopped being correct,
+  # because every import resolves through a symlink to source. This job installs
+  # the actual tarballs into a project outside the repository and drives the
+  # resulting binary against a scratch repo, so a release that would arrive
+  # broken fails here instead.
+  package:
+    name: ubuntu · the published artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # No model is called: the scratch repository is driven with --fixer noop,
+      # so this costs nothing and needs no harness installed on the runner.
+      - name: pack, install, and run it as a stranger would
+        run: node scripts/verify-package.mjs
+
   # The journal needs node:sqlite (Node >= 22.5) and is supposed to degrade to
   # "no memory, full price" on anything older rather than crash. This job is that
   # promise, checked — the CLI has to start and report on a runtime where the

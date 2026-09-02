@@ -21,3 +21,10 @@ Thumbs.db
 # Design docs stay local; the README is the only published markdown.
 *.md
 !README.md
+
+# Release artifacts. The per-package README and LICENSE are copies of the root
+# ones, written by scripts/prepare-release.mjs so npm has something to show —
+# generated rather than committed, so the two can never drift apart.
+packages/**/README.md
+packages/**/LICENSE
+*.tgz

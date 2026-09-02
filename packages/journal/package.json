@@ -1,7 +1,16 @@
 {
   "name": "@self-heal/journal",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Record of measured outcomes, backed by node:sqlite. Zero dependencies.",
+  "license": "MIT",
+  "author": "Ali Haider",
+  "homepage": "https://github.com/Ali7040/heal#readme",
+  "bugs": "https://github.com/Ali7040/heal/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git",
+    "directory": "packages/journal"
+  },
   "type": "module",
   "exports": {
     "./store": "./dist/store.js",
@@ -10,6 +19,12 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --build"
   },

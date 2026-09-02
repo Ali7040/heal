@@ -1,7 +1,16 @@
 {
   "name": "@self-heal/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Contracts, state machine, and safety invariants for the self-healing loop. Depends on nothing.",
+  "license": "MIT",
+  "author": "Ali Haider",
+  "homepage": "https://github.com/Ali7040/heal#readme",
+  "bugs": "https://github.com/Ali7040/heal/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git",
+    "directory": "packages/core"
+  },
   "type": "module",
   "exports": {
     "./contracts/context": "./dist/contracts/context.js",
@@ -27,6 +36,12 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --build"
   },

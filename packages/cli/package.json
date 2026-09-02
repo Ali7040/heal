@@ -1,7 +1,24 @@
 {
-  "name": "@self-heal/cli",
-  "version": "0.0.0",
-  "description": "Thin CLI \u2014 parses args, loads config, calls the runner. Phase 6.",
+  "name": "self-heal",
+  "version": "0.1.0",
+  "description": "A closed-loop agent that detects regressions deterministically, proposes a fix through your installed agent harness, and verifies it by re-running the original detection.",
+  "keywords": [
+    "agent",
+    "self-healing",
+    "regression",
+    "visual-regression",
+    "contract-testing",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Ali Haider",
+  "homepage": "https://github.com/Ali7040/heal#readme",
+  "bugs": "https://github.com/Ali7040/heal/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "bin": {
     "self-heal": "./dist/main.js"
@@ -9,6 +26,9 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
     "build": "tsc --build"
   },

@@ -1,12 +1,29 @@
 {
   "name": "@self-heal/fixer-noop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Logs the diagnosis and returns an empty patch. The fixer the test suite runs against.",
+  "license": "MIT",
+  "author": "Ali Haider",
+  "homepage": "https://github.com/Ali7040/heal#readme",
+  "bugs": "https://github.com/Ali7040/heal/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git",
+    "directory": "packages/fixers/noop"
+  },
   "type": "module",
   "exports": {
     ".": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --build"
   },

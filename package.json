@@ -1,6 +1,12 @@
 {
   "name": "self-heal-workspace",
   "private": true,
+  "license": "MIT",
+  "author": "Ali Haider",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git"
+  },
   "type": "module",
   "packageManager": "pnpm@9.15.4",
   "engines": {
@@ -16,7 +22,10 @@
     "probe:harness": "node scripts/harness-probe.mjs",
     "demo": "node scripts/demo.mjs",
     "demo:heal": "node scripts/demo.mjs --heal",
-    "demo:journal": "node scripts/demo.mjs --heal --twice"
+    "demo:journal": "node scripts/demo.mjs --heal --twice",
+    "release:prepare": "node scripts/prepare-release.mjs",
+    "release:check": "node scripts/verify-package.mjs",
+    "release:publish": "pnpm build && node scripts/prepare-release.mjs && pnpm -r publish --access public"
   },
   "devDependencies": {
     "@self-heal/core": "workspace:*",

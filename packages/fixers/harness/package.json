@@ -1,7 +1,16 @@
 {
   "name": "@self-heal/fixer-harness",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Adapter that drives the user's installed agent harness in a sandbox and captures the resulting patch from git.",
+  "license": "MIT",
+  "author": "Ali Haider",
+  "homepage": "https://github.com/Ali7040/heal#readme",
+  "bugs": "https://github.com/Ali7040/heal/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git",
+    "directory": "packages/fixers/harness"
+  },
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
@@ -13,6 +22,12 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --build"
   },

@@ -91,6 +91,14 @@ one helper moved *into* `core` because a second caller wanted it (D-014).
 ## Use it
 
 ```bash
+npx self-heal init      # or: npm i -g self-heal
+```
+
+Node >= 20.11, and a git repository. The journal wants Node >= 22.5
+(`node:sqlite`); on anything older it turns itself off and says so, and the loop
+still works at full price.
+
+```bash
 self-heal init          # writes a config and gitignores run artifacts
 self-heal run --dry-run # detect, diagnose, propose — nothing written, nothing spent
 self-heal run           # the real thing

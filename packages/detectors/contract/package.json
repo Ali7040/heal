@@ -1,7 +1,16 @@
 {
   "name": "@self-heal/detector-contract",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Detects API response schema drift by comparing a live response against a recorded contract.",
+  "license": "MIT",
+  "author": "Ali Haider",
+  "homepage": "https://github.com/Ali7040/heal#readme",
+  "bugs": "https://github.com/Ali7040/heal/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ali7040/heal.git",
+    "directory": "packages/detectors/contract"
+  },
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
@@ -12,6 +21,12 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --build"
   },
