@@ -28,11 +28,12 @@ import { NoopFixer } from '@self-heal/fixer-noop';
 import { openJournal, UnsupportedRuntimeError, type Journal } from '@self-heal/journal/store';
 
 import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './config.js';
+import { selectDetectors } from './select.js';
 
 const USAGE = `self-heal — detect, propose, verify, record
 
 Usage:
-  self-heal run     [--dry-run] [--config <path>] [--allow-dirty] [--verbose]
+  self-heal run     [--dry-run] [--only <id,...>] [--config <path>] [--allow-dirty]
   self-heal init    [--config <path>]
   self-heal journal [--limit <n>] [--forget <signature>] [--json]
 
@@ -41,6 +42,9 @@ Options:
                  Nothing is written and no checkpoint is committed.
   --allow-dirty  Proceed with uncommitted changes. Off by default: a dirty tree
                  means a clean rollback cannot be promised.
+  --only         Run only the named detectors, by id. Repeatable, or comma
+                 separated. A name matching nothing is an error, never an
+                 empty run.
   --config       Path to config (default: ./self-heal.config.json)
   --verbose      Include debug-level log lines.
   --json         Emit the run report as JSON on stdout.
@@ -65,6 +69,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       json: { type: 'boolean', default: false },
       journal: { type: 'boolean', default: true },
       fixer: { type: 'string', default: 'harness' },
+      only: { type: 'string', multiple: true },
       limit: { type: 'string', default: '20' },
       forget: { type: 'string' },
       help: { type: 'boolean', default: false },
@@ -117,7 +122,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   // tell which is which — that indistinguishability is the whole claim of the
   // plugin boundary, so it is worth noticing that this is the only place in the
   // codebase where all three appear together.
-  const detectors: Detector[] = [
+  const allDetectors: Detector[] = [
     ...config.checks.map(
       (check) =>
         new CommandDetector({
@@ -131,6 +136,17 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     ...(config.contracts === undefined ? [] : [buildContractDetector(config.contracts)]),
     ...(config.visual === undefined ? [] : [buildVisualDetector(config.visual)]),
   ];
+
+  // Filtered before anything else happens, so `--only nonsense` fails at once
+  // rather than after a journal is opened and a checkpoint commit exists.
+  const detectors = selectDetectors(allDetectors, values['only'] as string[] | undefined);
+
+  // Said out loud, because a narrowed run that exits 0 must not be mistaken for
+  // a clean bill of health on the whole repository.
+  if (detectors.length < allDetectors.length) {
+    const skipped = allDetectors.filter((d) => !detectors.includes(d)).map((d) => d.id);
+    log.warn(`--only: not measuring ${skipped.join(', ')}`);
+  }
 
   // Opened before the runner so a broken journal is a startup failure with a
   // readable message, not something discovered after a checkpoint commit exists.

@@ -72,8 +72,9 @@ test suite, and the wrong output:
 | 4 | Journal | **done** — a repeat regression heals in 305ms for $0 |
 | 5 | Visual detector | **done** — a colour regression detected and healed |
 | 6 | CLI + config + packaging | **done** — `self-heal run` heals a real repo |
+| 7 | Published | **done** — `npx self-heal`, verified by installing the tarballs |
 
-137 tests on Linux and Windows, no network, no model calls. Windows is in CI
+145 tests on Linux and Windows, no network, no model calls. Windows is in CI
 rather than an afterthought: the two worst bugs in this repository's history were
 both `cmd.exe` re-parsing a command line, and both were invisible on Linux.
 
@@ -102,12 +103,18 @@ still works at full price.
 self-heal init          # writes a config and gitignores run artifacts
 self-heal run --dry-run # detect, diagnose, propose — nothing written, nothing spent
 self-heal run           # the real thing
+self-heal run --only contracts   # just one detector, while iterating on it
 self-heal journal       # what it remembers, and what that has saved
 ```
 
 `run` drives the agent harness you already have installed, so it costs whatever
 your harness costs. `--dry-run` and `--fixer noop` are free, and detect and report
 exactly the same issues.
+
+`--only` narrows a run to named detectors, so iterating on one does not pay for a
+server boot and a screenshot every loop. A name matching nothing is an error, not
+an empty run — a typo that silently measured nothing would report zero issues,
+which is the one output this tool must never produce.
 
 Every proposal happens in a copy of your repository in the OS temp directory,
 built from `git ls-files` — so your `.gitignore` decides what a model can see, and

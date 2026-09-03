@@ -13,9 +13,10 @@
  * project outside the repository, and drives the resulting `self-heal` binary
  * against a scratch git repository containing a real failing check.
  *
- * It never touches the network for @self-heal packages: npm `overrides` map
- * every one of them onto a local tarball, so a missing rewrite surfaces as a
- * resolution failure here rather than as a broken install for someone else.
+ * It never touches the network for @self-heal packages: every one of them is
+ * installed from the tarball beside it, so a version that does not line up
+ * surfaces as a resolution failure here rather than as a broken install for
+ * someone else.
  */
 import { execFileSync } from 'node:child_process';
 import { copyFile, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -176,6 +177,15 @@ try {
     if (!report.includes(expected)) fail(`the run report is missing ${expected}:\n${report}`);
   }
   ok('detected the failing check, escalated it, and exited non-zero');
+
+  step('--only narrows the run, and refuses a name it does not know');
+  const narrowed = cli(['run', '--fixer', 'noop', '--only', 'smoke'], target, 1);
+  if (!narrowed.includes('ESCALATED')) fail(`--only smoke did not run the smoke detector:
+${narrowed}`);
+  // Exit 2 is a config error, and that is the point: a typo must never be a
+  // green run that measured nothing.
+  cli(['run', '--fixer', 'noop', '--only', 'smoek'], target, 2);
+  ok('--only smoke ran it; --only smoek was refused');
 
   step('the journal command works on a fresh install');
   cli(['journal'], target);
