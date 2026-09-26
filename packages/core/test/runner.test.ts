@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { RunContext } from '../src/contracts/context.js';
 import type { Detector } from '../src/contracts/detector.js';
+import type { Diagnosis } from '../src/contracts/diagnosis.js';
 import type { Fixer } from '../src/contracts/fixer.js';
 import type { Issue } from '../src/contracts/issue.js';
 import type { Patch } from '../src/contracts/patch.js';
@@ -173,6 +174,29 @@ describe('Runner', () => {
 
     expect(proposals).toBe(2);
     expect(report.outcomes[0]?.state).toBe('ESCALATED');
+  });
+
+  it('tells a retry what already failed, and why, instead of asking the same question twice', async () => {
+    sandbox = await brokenSandbox();
+    const seen: Diagnosis[] = [];
+    const fixer: Fixer = {
+      id: 'learning',
+      propose: async (diagnosis) => {
+        seen.push(diagnosis);
+        // Wrong on the first try; right once it has been told the first was wrong.
+        const contents = diagnosis.priorAttempts === undefined ? 'export const value = 999;\n' : FIXED;
+        return { fixerId: 'learning', signature: diagnosis.issue.signature, edits: [{ path: 'src/value.mjs', contents }], rationale: 'guess' };
+      },
+    };
+
+    const { runner } = await makeRunner(sandbox, fixer, { attemptCap: 2 });
+    const report = await runner.run();
+
+    expect(report.outcomes[0]?.state).toBe('HEALED');
+    expect(seen[0]?.priorAttempts).toBeUndefined();
+    expect(seen[1]?.priorAttempts).toEqual([
+      { files: ['src/value.mjs'], rationale: 'guess', reason: 'verification failed; tree restored' },
+    ]);
   });
 
   it('rejects a patch outside the allowlist before writing it (invariant 4)', async () => {

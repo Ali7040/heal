@@ -114,11 +114,31 @@ export function buildPrompt(diagnosis: Diagnosis): string {
     '',
     'Relevant code:',
     slices,
+    ...priorAttemptLines(diagnosis),
     '',
     `Edit only these files: ${diagnosis.editableFiles.join(', ')}`,
     'Fix the underlying cause. Do not modify tests or checks.',
     'Do not create new files. Do not run git.',
   ].join('\n');
+}
+
+/**
+ * Earlier failed attempts, stated as measurements. Without this a retry is the
+ * identical prompt at the identical price, and tends to earn the identical patch.
+ */
+function priorAttemptLines(diagnosis: Diagnosis): string[] {
+  const prior = diagnosis.priorAttempts ?? [];
+  if (prior.length === 0) return [];
+
+  return [
+    '',
+    'Earlier attempts at this issue were measured and FAILED. Do not repeat them;',
+    'take a different approach:',
+    ...prior.map((attempt, index) => {
+      const files = attempt.files.length > 0 ? attempt.files.join(', ') : 'no files';
+      return `${index + 1}. Edited ${files} ("${attempt.rationale}") — ${attempt.reason}`;
+    }),
+  ];
 }
 
 function formatLocation(issue: Diagnosis['issue']): string {

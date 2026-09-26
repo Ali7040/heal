@@ -19,7 +19,8 @@
  */
 import type { RunContext } from '../contracts/context.js';
 import type { Detector } from '../contracts/detector.js';
-import type { Diagnosis } from '../contracts/diagnosis.js';
+import type { Diagnosis, PriorAttempt } from '../contracts/diagnosis.js';
+import { PRIOR_ATTEMPT_TEXT_LIMIT } from '../contracts/diagnosis.js';
 import type { Fixer } from '../contracts/fixer.js';
 import type { Issue } from '../contracts/issue.js';
 import type { JournalPort } from '../contracts/journal.js';
@@ -163,6 +164,10 @@ export class Runner {
 
     this.#to('TRIAGING', issue.signature);
 
+    // What already failed for this issue, fed to the next proposal so a retry is
+    // a different guess rather than the same prompt paid for twice (D-018).
+    const failures: PriorAttempt[] = [];
+
     // Free path first: a previously verified patch for this exact signature is
     // replayed without involving a fixer at all (D-006). Costs nothing.
     const remembered = await this.#journal.lookup(issue.signature);
@@ -170,6 +175,7 @@ export class Runner {
       this.#to('REPLAY', issue.signature);
       const replayed = await this.#attempt(issue, detector, remembered.patch, true);
       if (replayed.state === 'HEALED') return replayed;
+      failures.push(priorAttempt(remembered.patch, `previously verified fix no longer works: ${replayed.reason}`));
       ctx.log.warn('replay failed, falling back to a fresh proposal', { signature: issue.signature });
     }
 
@@ -179,11 +185,13 @@ export class Runner {
     // Invariant 3: the cap, not the loop, decides when to stop trying.
     while (this.#breaker.mayAttempt(issue.signature)) {
       this.#to('DIAGNOSING', issue.signature);
-      const diagnosis = await this.#options.diagnose(issue, ctx);
+      const built = await this.#options.diagnose(issue, ctx);
+      const diagnosis: Diagnosis = failures.length > 0 ? { ...built, priorAttempts: [...failures] } : built;
       ctx.log.debug('diagnosis built', {
         signature: issue.signature,
         slices: diagnosis.slices.length,
         editable: diagnosis.editableFiles.length,
+        priorAttempts: failures.length,
       });
 
       if (!ctx.dryRun) this.#breaker.recordAttempt(issue.signature);
@@ -231,6 +239,7 @@ export class Runner {
       const attempted = await this.#attempt(issue, detector, patch, false, checkpoint ?? undefined);
       if (attempted.state === 'HEALED') return attempted;
       lastReason = attempted.reason;
+      failures.push(priorAttempt(patch, attempted.reason));
     }
 
     return this.#escalate(issue, `attempt cap reached (${this.#breaker.attemptCap}); last: ${lastReason}`, lastPatch);
@@ -357,4 +366,16 @@ export class Runner {
       durationMs: Date.now() - startedAt,
     };
   }
+}
+
+function priorAttempt(patch: Patch, reason: string): PriorAttempt {
+  return {
+    files: patch.edits.map((edit) => edit.path),
+    rationale: clip(patch.rationale),
+    reason: clip(reason),
+  };
+}
+
+function clip(text: string): string {
+  return text.length > PRIOR_ATTEMPT_TEXT_LIMIT ? `${text.slice(0, PRIOR_ATTEMPT_TEXT_LIMIT)}…` : text;
 }
