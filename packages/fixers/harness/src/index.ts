@@ -102,7 +102,10 @@ export class HarnessFixer implements Fixer {
 export function buildPrompt(diagnosis: Diagnosis): string {
   const { issue } = diagnosis;
   const slices = diagnosis.slices
-    .map((slice) => `--- ${slice.path}:${slice.startLine}-${slice.endLine}\n${slice.source}`)
+    .map((slice) => {
+      const symbol = slice.symbol !== undefined ? ` (${slice.symbol})` : '';
+      return `--- ${slice.path}:${slice.startLine}-${slice.endLine}${symbol}\n${slice.source}`;
+    })
     .join('\n\n');
 
   return [

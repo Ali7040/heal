@@ -3,7 +3,7 @@ import type { Issue } from './issue.js';
 /**
  * The compact, bounded description of an issue handed to a fixer.
  *
- * Diagnoses are AST-sliced and capped. Whole files never appear here — growing the
+ * Diagnoses are sliced by declaration (or outlined) and capped — see D-019. Whole files never appear here — growing the
  * context window is the failure mode this project exists to avoid (AGENTS.md).
  */
 
