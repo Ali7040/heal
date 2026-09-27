@@ -12,7 +12,7 @@ import type { Patch } from '../contracts/patch.js';
 
 export interface AllowlistRejection {
   readonly path: string;
-  readonly reason: 'outside-repo' | 'not-allowed';
+  readonly reason: 'outside-repo' | 'protected' | 'not-allowed' | 'stale';
 }
 
 export interface AllowlistResult {
@@ -20,12 +20,25 @@ export interface AllowlistResult {
   readonly rejected: readonly AllowlistRejection[];
 }
 
-export function checkPatch(patch: Patch, allowed: readonly string[]): AllowlistResult {
+/**
+ * `protectedPaths` are checked before the allowlist and win over it: they are
+ * what the detectors measure against, and no allowlist, however broad, may open
+ * them to a patch (invariant 8, D-021).
+ */
+export function checkPatch(
+  patch: Patch,
+  allowed: readonly string[],
+  protectedPaths: readonly string[] = [],
+): AllowlistResult {
   const rejected: AllowlistRejection[] = [];
 
   for (const edit of patch.edits) {
     if (isAbsolute(edit.path) || escapesRepo(edit.path)) {
       rejected.push({ path: edit.path, reason: 'outside-repo' });
+      continue;
+    }
+    if (protectedPaths.some((pattern) => matches(toPosix(edit.path), pattern))) {
+      rejected.push({ path: edit.path, reason: 'protected' });
       continue;
     }
     if (!allowed.some((pattern) => matches(toPosix(edit.path), pattern))) {

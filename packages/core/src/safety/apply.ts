@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path';
 
 import type { Patch } from '../contracts/patch.js';
 import { checkPatch, type AllowlistRejection } from './allowlist.js';
+import { staleEdits } from './base.js';
 
 export interface ApplyOptions {
   readonly repoRoot: string;
@@ -27,6 +28,8 @@ export interface ApplyOptions {
    * the type system refuses an unprotected mutation (invariant 1).
    */
   readonly checkpoint: string;
+  /** Globs no patch may touch, whatever the allowlist says (invariant 8). */
+  readonly protectedPaths?: readonly string[];
 }
 
 export type ApplyResult =
@@ -41,9 +44,16 @@ export async function applyPatch(patch: Patch, options: ApplyOptions): Promise<A
   }
 
   // Gate first, write second. Never interleaved.
-  const check = checkPatch(patch, options.allowlist);
+  const check = checkPatch(patch, options.allowlist, options.protectedPaths ?? []);
   if (!check.ok) {
     return { applied: false, reason: 'rejected', rejected: check.rejected };
+  }
+
+  // Whole-file contents written onto a file that has moved on would revert
+  // everything since. Checked for every edit that knows its base (D-020).
+  const stale = await staleEdits(patch, options.repoRoot, { requireBase: false });
+  if (stale.length > 0) {
+    return { applied: false, reason: 'rejected', rejected: stale.map((path) => ({ path, reason: 'stale' })) };
   }
 
   const written: string[] = [];

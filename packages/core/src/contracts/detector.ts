@@ -21,4 +21,11 @@ export interface Detector {
    * applied — only on the basis of the measurement passing.
    */
   verify(issue: Issue, ctx: RunContext): Promise<boolean>;
+
+  /**
+   * Repo-relative globs this detector measures *against* — baselines, recorded
+   * contracts. A patch touching one is rejected whatever the allowlist says,
+   * because a fix that edits the measurement makes `HEALED` meaningless (D-021).
+   */
+  protectedPaths?(): readonly string[];
 }

@@ -10,6 +10,15 @@ export interface FileEdit {
   readonly path: string;
   /** Full contents to write. Whole-file replacement keeps application deterministic. */
   readonly contents: string;
+  /**
+   * Hash of the file this edit was made against (`null`: it did not exist).
+   *
+   * Whole-file contents are only safe to write onto the file they were derived
+   * from — written onto a newer one, they silently revert every change since. The
+   * runner stamps this from the real tree, and a mismatch refuses the write (D-020).
+   * Absent means unknown: accepted for a fresh proposal, refused for a replay.
+   */
+  readonly base?: string | null;
 }
 
 export interface Patch {
