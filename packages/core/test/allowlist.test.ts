@@ -53,3 +53,12 @@ describe('checkPatch', () => {
     expect(result.rejected.map((r) => r.path)).toEqual(['a.txt', 'b.txt']);
   });
 });
+
+describe('protected paths (invariant 8)', () => {
+  it('win over an allowlist that would otherwise admit them', () => {
+    const result = checkPatch(patchTouching('src/a.ts', 'src/a.test.ts'), ['**'], ['**/*.test.*']);
+    expect(result.ok).toBe(false);
+    expect(result.rejected).toEqual([{ path: 'src/a.test.ts', reason: 'protected' }]);
+  });
+
+});

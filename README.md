@@ -160,6 +160,13 @@ Assertions in the engine, not guidelines. Each one is covered by a test.
 5. A dirty working tree blocks automatic changes unless explicitly overridden.
 6. N consecutive failed heals trip the circuit breaker and halt the run.
 7. `--dry-run` is a real code path, not a flag checked at the last moment.
+8. A patch may never touch what the checks measure against — tests, baselines,
+   recorded contracts, `.self-heal/`, the config — whatever the allowlist says. A
+   fix that edits the measurement makes the check pass without fixing anything.
+
+Test files are protected by default (`*.test.*`, `*.spec.*`, `*_test.*`,
+`test_*.py`, `__tests__/`, `test/`, `tests/`). Set `"protected"` in the config to
+replace that list; `.self-heal/` and the config file stay protected regardless.
 
 ---
 
@@ -201,9 +208,12 @@ A record of **measured** outcomes, in SQLite at `.self-heal/journal.sqlite`.
 
 A hit is a cheaper first guess, not a shortcut. A remembered patch is checkpointed,
 allowlist-checked, applied, and then re-measured exactly like a fresh proposal — so
-a stale patch costs a few seconds and can never cost correctness (D-012). Only
-verified patches are offered, and one that stops working is demoted on its next
-failure.
+a stale patch can never cost correctness (D-012). Only verified patches are
+offered, and one that stops working is demoted on its next failure.
+
+A remembered patch also records the exact file it was made against. Once that file
+has changed, the patch is not replayed — writing old contents onto a newer file
+would quietly undo the newer work — and a fresh fix is proposed instead (D-020).
 
 Backed by `node:sqlite`, so there is no native module to compile and no dependency
 to install — at the cost of needing Node 22.5+. On anything older the journal turns

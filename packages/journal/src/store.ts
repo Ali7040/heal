@@ -9,7 +9,10 @@
  * The rule that keeps it safe: **a journal hit is never trusted.** It is a cheaper
  * first guess. A replayed patch is applied, then measured by the originating
  * detector exactly like a fresh proposal, and a replay that fails falls back to
- * proposing. So a stale patch costs a little time and can never cost correctness.
+ * proposing. A patch also carries the hash of each file it was made against, and
+ * the runner refuses to replay it once those files have moved on — whole-file
+ * contents written onto a newer file would revert work no detector measures
+ * (D-020). So a stale patch costs a fresh proposal, never correctness.
  *
  * Backed by `node:sqlite`, so this package still has zero dependencies.
  */

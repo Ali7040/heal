@@ -169,6 +169,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     // it just gets a journal that remembers nothing (phase 1's seam, now filled).
     ...(journal !== undefined ? { journal } : {}),
     allowlist: config.allowlist,
+    protectedPaths: config.protected,
     attemptCap: config.attemptCap,
     failureThreshold: config.failureThreshold,
     allowDirty: values['allow-dirty'] === true,

@@ -27,7 +27,9 @@ import type { JournalPort } from '../contracts/journal.js';
 import { NullJournal } from '../contracts/journal.js';
 import type { Patch } from '../contracts/patch.js';
 import type { GitRepo } from '../git/repo.js';
+import { checkPatch } from '../safety/allowlist.js';
 import { applyPatch } from '../safety/apply.js';
+import { staleEdits, stampBases } from '../safety/base.js';
 import { CircuitBreaker } from '../safety/circuit-breaker.js';
 import { canTransition, type RunState } from './state.js';
 
@@ -38,6 +40,11 @@ export interface RunnerOptions {
   readonly ctx: RunContext;
   /** Globs a patch may touch. Anything else is rejected before it is written. */
   readonly allowlist: readonly string[];
+  /**
+   * Globs no patch may touch, whatever the allowlist says — tests, the config.
+   * Joined by `ALWAYS_PROTECTED` and every detector's own `protectedPaths()`.
+   */
+  readonly protectedPaths?: readonly string[];
   readonly diagnose: (issue: Issue, ctx: RunContext) => Promise<Diagnosis>;
   readonly journal?: JournalPort;
   readonly attemptCap?: number;
@@ -47,6 +54,12 @@ export interface RunnerOptions {
   /** Called on every state change — the loop's timeline, used by logs and the demo. */
   readonly onTransition?: (event: TransitionEvent) => void;
 }
+
+/**
+ * The loop's own state: baselines, recorded contracts, the journal, evidence.
+ * Protected unconditionally, so no config can hand a patch the measurement.
+ */
+export const ALWAYS_PROTECTED: readonly string[] = ['.self-heal/**'];
 
 export interface TransitionEvent {
   readonly from: RunState;
@@ -80,11 +93,17 @@ export class Runner {
   readonly #options: RunnerOptions;
   readonly #journal: JournalPort;
   readonly #breaker: CircuitBreaker;
+  readonly #protected: readonly string[];
   #state: RunState = 'IDLE';
 
   constructor(options: RunnerOptions) {
     this.#options = options;
     this.#journal = options.journal ?? new NullJournal();
+    this.#protected = [
+      ...ALWAYS_PROTECTED,
+      ...(options.protectedPaths ?? []),
+      ...options.detectors.flatMap((detector) => detector.protectedPaths?.() ?? []),
+    ];
     this.#breaker = new CircuitBreaker({
       ...(options.attemptCap !== undefined ? { attemptCap: options.attemptCap } : {}),
       ...(options.failureThreshold !== undefined ? { failureThreshold: options.failureThreshold } : {}),
@@ -171,7 +190,18 @@ export class Runner {
     // Free path first: a previously verified patch for this exact signature is
     // replayed without involving a fixer at all (D-006). Costs nothing.
     const remembered = await this.#journal.lookup(issue.signature);
-    if (remembered?.verified === true && remembered.patch.edits.length > 0) {
+    // A remembered patch is whole-file contents, so it fits only the files it was
+    // made against. Replayed onto anything newer it would revert every change
+    // since — often unmeasured by this detector, so verify could not catch it (D-020).
+    const stale =
+      remembered?.verified === true ? await staleEdits(remembered.patch, ctx.repoRoot, { requireBase: true }) : [];
+    if (stale.length > 0) {
+      ctx.log.info('remembered fix skipped: files changed since it was made', {
+        signature: issue.signature,
+        files: stale,
+      });
+    }
+    if (remembered?.verified === true && remembered.patch.edits.length > 0 && stale.length === 0) {
       this.#to('REPLAY', issue.signature);
       const replayed = await this.#attempt(issue, detector, remembered.patch, true);
       if (replayed.state === 'HEALED') return replayed;
@@ -217,7 +247,9 @@ export class Runner {
       }
 
       this.#to('PROPOSING', issue.signature);
-      const patch = await this.#options.fixer.propose(diagnosis);
+      // Stamped from the real tree, which is exactly what the fixer's sandbox was
+      // copied from — so a later replay can prove it still fits (D-020).
+      const patch = await stampBases(await this.#options.fixer.propose(diagnosis), ctx.repoRoot);
       lastPatch = patch;
 
       // Stop before APPLYING. Nothing has been written and nothing committed, so
@@ -228,10 +260,7 @@ export class Runner {
           state: 'PROPOSED',
           attempts: 0,
           patch,
-          reason:
-            patch.edits.length === 0
-              ? 'dry run: fixer proposed no change'
-              : `dry run: would edit ${patch.edits.map((e) => e.path).join(', ')}`,
+          reason: dryRunReason(patch, this.#options.allowlist, this.#protected),
           replayed: false,
         };
       }
@@ -265,6 +294,7 @@ export class Runner {
     const applied = await applyPatch(patch, {
       repoRoot: ctx.repoRoot,
       allowlist: this.#options.allowlist,
+      protectedPaths: this.#protected,
       checkpoint: restorePoint,
     });
 
@@ -378,4 +408,14 @@ function priorAttempt(patch: Patch, reason: string): PriorAttempt {
 
 function clip(text: string): string {
   return text.length > PRIOR_ATTEMPT_TEXT_LIMIT ? `${text.slice(0, PRIOR_ATTEMPT_TEXT_LIMIT)}…` : text;
+}
+
+/** A dry run reports what the gate would say, not just what the fixer wanted. */
+function dryRunReason(patch: Patch, allowlist: readonly string[], protectedPaths: readonly string[]): string {
+  if (patch.edits.length === 0) return 'dry run: fixer proposed no change';
+  const check = checkPatch(patch, allowlist, protectedPaths);
+  if (!check.ok) {
+    return `dry run: patch would be rejected: ${check.rejected.map((r) => `${r.path} (${r.reason})`).join(', ')}`;
+  }
+  return `dry run: would edit ${patch.edits.map((e) => e.path).join(', ')}`;
 }

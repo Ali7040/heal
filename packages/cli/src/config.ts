@@ -11,7 +11,7 @@
  * kind of decision users discover only after it has cost them something.
  */
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 export interface CheckConfig {
   readonly id: string;
@@ -77,6 +77,11 @@ export interface SelfHealConfig {
   readonly visual?: VisualConfig;
   /** Globs a patch may touch, repo-relative. */
   readonly allowlist: readonly string[];
+  /**
+   * Globs no patch may touch, whatever `allowlist` says. Defaults to common test
+   * layouts; the config file itself is always added (D-021).
+   */
+  readonly protected: readonly string[];
   readonly harness: string;
   readonly attemptCap: number;
   readonly failureThreshold: number;
@@ -84,6 +89,21 @@ export interface SelfHealConfig {
   /** Outcome journal, relative to the repo root. Gitignored by `self-heal init`. */
   readonly journalPath: string;
 }
+
+/**
+ * Tests are the measurement for most command checks. A patch that edits the test
+ * makes the check pass without fixing anything, so they are off limits unless a
+ * config says otherwise — `"protected": []` opts out entirely.
+ */
+export const DEFAULT_PROTECTED: readonly string[] = [
+  '**/*.test.*',
+  '**/*.spec.*',
+  '**/*_test.*',
+  '**/test_*.py',
+  '**/__tests__/**',
+  '**/test/**',
+  '**/tests/**',
+];
 
 const DEFAULTS = {
   harness: 'claude-code',
@@ -139,12 +159,29 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
     );
   }
 
+  const protectedInput = record['protected'];
+  if (protectedInput !== undefined && !Array.isArray(protectedInput)) {
+    throw new ConfigError(
+      "config.protected must be an array of globs. Use [] to protect nothing beyond the loop's own state and this config.",
+    );
+  }
+
+  const repoRoot = typeof record['repoRoot'] === 'string' ? resolve(cwd, record['repoRoot']) : cwd;
+  // A patch that rewrote the config could widen its own allowlist or delete a
+  // check for every later run. It is protected whatever `protected` says.
+  const configInRepo = relative(repoRoot, source).split(sep).join('/');
+  const protectedPaths = [
+    ...(Array.isArray(protectedInput) ? protectedInput.map(String) : DEFAULT_PROTECTED),
+    ...(configInRepo.startsWith('..') || isAbsolute(configInRepo) ? [] : [configInRepo]),
+  ];
+
   return {
-    repoRoot: typeof record['repoRoot'] === 'string' ? resolve(cwd, record['repoRoot']) : cwd,
+    repoRoot,
     checks: checks.map((check, index) => validateCheck(check, index)),
     ...(contracts !== undefined ? { contracts } : {}),
     ...(visual !== undefined ? { visual } : {}),
     allowlist: allowlist.map(String),
+    protected: protectedPaths,
     harness: typeof record['harness'] === 'string' ? record['harness'] : DEFAULTS.harness,
     attemptCap: typeof record['attemptCap'] === 'number' ? record['attemptCap'] : DEFAULTS.attemptCap,
     failureThreshold:

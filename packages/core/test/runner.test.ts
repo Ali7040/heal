@@ -21,10 +21,12 @@ import type { JournalPort, RecordedOutcome } from '../src/contracts/journal.js';
 import { GitRepo } from '../src/git/repo.js';
 import { silentLogger } from '../src/logger.js';
 import { Runner, type TransitionEvent } from '../src/runner/runner.js';
+import { contentHash } from '../src/safety/base.js';
 import { Sandbox } from '@self-heal/testkit/sandbox';
 
 const BROKEN = 'export const value = 1;\n';
 const FIXED = 'export const value = 2;\n';
+const TEST_FILE = 'assert(value === 2);\n';
 
 let sandbox: Sandbox | undefined;
 
@@ -107,6 +109,19 @@ async function makeRunner(
   });
 
   return { runner, transitions };
+}
+
+function hashOf(text: string): string {
+  return contentHash(Buffer.from(text, 'utf8'));
+}
+
+function rememberedFix(base: string): Patch {
+  return {
+    fixerId: 'previous',
+    signature: 'sig-value',
+    edits: [{ path: 'src/value.mjs', contents: FIXED, base }],
+    rationale: 'remembered',
+  };
 }
 
 async function brokenSandbox(): Promise<Sandbox> {
@@ -255,7 +270,7 @@ describe('Runner', () => {
     const remembered: RecordedOutcome = {
       signature: 'sig-value',
       kind: 'wrong-value',
-      patch: { fixerId: 'previous', signature: 'sig-value', edits: [{ path: 'src/value.mjs', contents: FIXED }], rationale: 'remembered' },
+      patch: rememberedFix(hashOf(BROKEN)),
       verified: true,
       attempts: 1,
     };
@@ -297,6 +312,109 @@ describe('Runner', () => {
 
     expect(recorded).toHaveLength(1);
     expect(recorded[0]?.verified).toBe(false);
+  });
+
+  it('never lets a patch edit what a detector measures against, whatever the allowlist says (invariant 8)', async () => {
+    sandbox = await Sandbox.create({
+      files: { 'src/value.mjs': BROKEN, 'src/value.test.mjs': TEST_FILE, '.self-heal/baselines/v.png': 'png' },
+      prefix: 'runner-test-',
+    });
+    // The patch fixes nothing; it rewrites the test and the baseline so the check
+    // would pass — the fix a model asked to "make it green" can always find.
+    const { runner } = await makeRunner(
+      sandbox,
+      fixerReturning([
+        { path: 'src/value.test.mjs', contents: '' },
+        { path: '.self-heal/baselines/v.png', contents: 'forged' },
+      ]),
+      { allowlist: ['**'], protectedPaths: ['**/*.test.*'], attemptCap: 1 },
+    );
+
+    const report = await runner.run();
+
+    expect(report.outcomes[0]?.state).toBe('ESCALATED');
+    expect(report.outcomes[0]?.reason).toContain('src/value.test.mjs (protected)');
+    expect(report.outcomes[0]?.reason).toContain('.self-heal/baselines/v.png (protected)');
+    expect(await sandbox.read('src/value.test.mjs')).toBe(TEST_FILE);
+    expect(await sandbox.read('.self-heal/baselines/v.png')).toBe('png');
+  });
+
+  it("honours a detector's own protected paths", async () => {
+    sandbox = await brokenSandbox();
+    const detector = Object.assign(new FileDetector(sandbox.dir), { protectedPaths: () => ['src/**'] });
+    const { runner } = await makeRunner(sandbox, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]), {
+      detectors: [detector],
+      attemptCap: 1,
+    });
+
+    const report = await runner.run();
+
+    expect(report.outcomes[0]?.state).toBe('ESCALATED');
+    expect(await sandbox.read('src/value.mjs')).toBe(BROKEN);
+  });
+
+  it('refuses to replay a remembered fix onto a file that has changed since (D-020)', async () => {
+    // The file today carries unrelated work the remembered fix never saw.
+    const edited = `${BROKEN}export const other = 'new work';\n`;
+    sandbox = await Sandbox.create({ files: { 'src/value.mjs': edited }, prefix: 'runner-test-' });
+    const remembered: RecordedOutcome = {
+      signature: 'sig-value',
+      kind: 'wrong-value',
+      patch: rememberedFix(hashOf(BROKEN)),
+      verified: true,
+      attempts: 1,
+    };
+    const journal: JournalPort = { lookup: async () => remembered, record: async () => {} };
+
+    let proposed = false;
+    const fixer: Fixer = {
+      id: 'fresh',
+      propose: async (diagnosis) => {
+        proposed = true;
+        return { fixerId: 'fresh', signature: diagnosis.issue.signature, edits: [], rationale: 'nothing' };
+      },
+    };
+
+    const { runner, transitions } = await makeRunner(sandbox, fixer, { journal, attemptCap: 1 });
+    await runner.run();
+
+    expect(transitions.map((t) => t.to)).not.toContain('REPLAY');
+    expect(proposed).toBe(true);
+    // The unrelated work survived. Replaying would have wiped it and still reported HEALED.
+    expect(await sandbox.read('src/value.mjs')).toBe(edited);
+  });
+
+  it('refuses to replay a remembered fix that never recorded its base', async () => {
+    sandbox = await brokenSandbox();
+    const remembered: RecordedOutcome = {
+      signature: 'sig-value',
+      kind: 'wrong-value',
+      patch: { fixerId: 'old', signature: 'sig-value', edits: [{ path: 'src/value.mjs', contents: FIXED }], rationale: 'legacy' },
+      verified: true,
+      attempts: 1,
+    };
+    const journal: JournalPort = { lookup: async () => remembered, record: async () => {} };
+    const { runner, transitions } = await makeRunner(sandbox, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]), {
+      journal,
+    });
+
+    const report = await runner.run();
+
+    expect(transitions.map((t) => t.to)).not.toContain('REPLAY');
+    // Still healed — by a fresh proposal, which is measured the same way.
+    expect(report.outcomes[0]?.state).toBe('HEALED');
+    expect(report.outcomes[0]?.replayed).toBe(false);
+  });
+
+  it('records the base each fresh edit was made against, so it can be replayed later', async () => {
+    sandbox = await brokenSandbox();
+    const recorded: RecordedOutcome[] = [];
+    const journal: JournalPort = { lookup: async () => undefined, record: async (o) => void recorded.push(o) };
+    const { runner } = await makeRunner(sandbox, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]), { journal });
+
+    await runner.run();
+
+    expect(recorded[0]?.patch.edits[0]?.base).toBe(hashOf(BROKEN));
   });
 
   it('does nothing at all when there is nothing to detect', async () => {

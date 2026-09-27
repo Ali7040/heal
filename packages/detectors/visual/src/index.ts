@@ -77,6 +77,11 @@ export class VisualDetector implements Detector {
     this.#options = options;
   }
 
+  /** The baselines are what this detector measures against — never a patch's to edit (D-021). */
+  protectedPaths(): readonly string[] {
+    return [`${toGlobDir(this.#options.baselineDir ?? DEFAULT_BASELINE_DIR)}/**`];
+  }
+
   async detect(ctx: RunContext): Promise<Issue[]> {
     return this.#withServer(ctx, async () => {
       const issues: Issue[] = [];
@@ -304,4 +309,8 @@ export function slug(name: string): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'view'
   );
+}
+
+function toGlobDir(dir: string): string {
+  return dir.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
 }

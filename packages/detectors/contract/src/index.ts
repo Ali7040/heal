@@ -75,6 +75,11 @@ export class ContractDetector implements Detector {
     this.#options = options;
   }
 
+  /** The recorded contracts are what this detector measures against — never a patch's to edit (D-021). */
+  protectedPaths(): readonly string[] {
+    return [`${toGlobDir(this.#options.contractsDir ?? DEFAULT_CONTRACTS_DIR)}/**`];
+  }
+
   async detect(ctx: RunContext): Promise<Issue[]> {
     return this.#withServer(ctx, async () => {
       const issues: Issue[] = [];
@@ -250,4 +255,8 @@ export class ContractDetector implements Detector {
   #contractsDir(ctx: RunContext): string {
     return join(ctx.repoRoot, this.#options.contractsDir ?? DEFAULT_CONTRACTS_DIR);
   }
+}
+
+function toGlobDir(dir: string): string {
+  return dir.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
 }
