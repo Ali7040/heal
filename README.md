@@ -118,9 +118,16 @@ which is the one output this tool must never produce.
 
 Every proposal happens in a copy of your repository in the OS temp directory,
 built from `git ls-files` — so your `.gitignore` decides what a model can see, and
-nothing it does outlives the attempt. A checkpoint commit precedes every write, a
-dirty tree stops the run, and `HEALED` still means only one thing: the check that
-found the problem passes now.
+nothing it does outlives the attempt. A checkpoint precedes every write, a dirty
+tree stops the run, and `HEALED` still means only one thing: the check that found
+the problem passes now.
+
+What a run leaves in your history is one commit per verified fix, authored by
+`self-heal` and named for what it fixed — so each can be reviewed or reverted on
+its own (`git log --author=self-heal`). A failed attempt leaves nothing: no empty
+checkpoint commits, no dirty files. When one fix also cures another issue (a type
+error that was failing the tests too), the second is re-measured and reported
+`RESOLVED` without a model call.
 
 ---
 

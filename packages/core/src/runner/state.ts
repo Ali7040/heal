@@ -18,6 +18,8 @@ export type RunState =
   | 'APPLYING'
   | 'VERIFYING'
   | 'HEALED'
+  /** Measured healthy by its own detector before any patch of its own — an earlier fix cured it. */
+  | 'RESOLVED'
   | 'REVERTED'
   | 'ESCALATED';
 
@@ -26,18 +28,20 @@ export type RunState =
  * it re-enters the loop when the attempt cap allows, which is exactly why the two
  * ideas are separate constants rather than one list.
  */
-export const OUTCOME_STATES = ['HEALED', 'REVERTED', 'ESCALATED'] as const;
+export const OUTCOME_STATES = ['HEALED', 'RESOLVED', 'REVERTED', 'ESCALATED'] as const;
 export type OutcomeState = (typeof OUTCOME_STATES)[number];
 
 /** States the loop can stop in. */
-export const TERMINAL_STATES = ['HEALED', 'ESCALATED'] as const;
+export const TERMINAL_STATES = ['HEALED', 'RESOLVED', 'ESCALATED'] as const;
 export type TerminalState = (typeof TERMINAL_STATES)[number];
 
 export const TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = {
   IDLE: ['DETECTING'],
   DETECTING: ['TRIAGING', 'IDLE'],
   // Known signature with a verified patch replays without a model call.
-  TRIAGING: ['REPLAY', 'DIAGNOSING'],
+  // Or, once a fix has landed this run, an issue its detector now measures
+  // healthy is RESOLVED for free — nothing of its own was applied (D-022).
+  TRIAGING: ['REPLAY', 'DIAGNOSING', 'RESOLVED'],
   REPLAY: ['APPLYING', 'DIAGNOSING'],
   DIAGNOSING: ['CHECKPOINTING'],
   // Invariant 1: a checkpoint always precedes mutation. No edge skips it.
@@ -49,6 +53,7 @@ export const TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = {
   // Retry re-enters the loop at diagnosis; the cap decides whether it may.
   REVERTED: ['DIAGNOSING', 'ESCALATED'],
   HEALED: [],
+  RESOLVED: [],
   ESCALATED: [],
 };
 

@@ -202,7 +202,9 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
 
   // Exit code carries the outcome so CI can act on it: anything unhealed is a
   // failure, because the point is that the repo ends healthy.
-  const unresolved = report.outcomes.filter((o) => o.state !== 'HEALED' && o.state !== 'PROPOSED');
+  const unresolved = report.outcomes.filter(
+    (o) => o.state !== 'HEALED' && o.state !== 'RESOLVED' && o.state !== 'PROPOSED',
+  );
   return unresolved.length > 0 ? 1 : 0;
 }
 
@@ -411,11 +413,11 @@ function formatReport(outcomes: readonly IssueOutcome[], issues: number, dryRun:
   if (issues === 0) return 'no issues detected\n';
 
   const lines = outcomes.map((outcome) => {
-    const marker = { HEALED: '✔', PROPOSED: '·', REVERTED: '✗', ESCALATED: '!' }[outcome.state];
+    const marker = { HEALED: '✔', RESOLVED: '✔', PROPOSED: '·', REVERTED: '✗', ESCALATED: '!' }[outcome.state];
     return `${marker} ${outcome.state.padEnd(9)} ${outcome.issue.kind} [${outcome.issue.signature.slice(0, 8)}] ${outcome.reason}`;
   });
 
-  const healed = outcomes.filter((o) => o.state === 'HEALED').length;
+  const healed = outcomes.filter((o) => o.state === 'HEALED' || o.state === 'RESOLVED').length;
   const summary = dryRun
     ? `${outcomes.length} issue(s) — dry run, nothing written`
     : `${healed}/${outcomes.length} healed`;

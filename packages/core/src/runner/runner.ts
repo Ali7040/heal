@@ -70,7 +70,7 @@ export interface TransitionEvent {
 
 export interface IssueOutcome {
   readonly issue: Issue;
-  readonly state: 'HEALED' | 'REVERTED' | 'ESCALATED' | 'PROPOSED';
+  readonly state: 'HEALED' | 'RESOLVED' | 'REVERTED' | 'ESCALATED' | 'PROPOSED';
   readonly attempts: number;
   /** Present when a patch was produced, applied or not. */
   readonly patch?: Patch;
@@ -94,6 +94,8 @@ export class Runner {
   readonly #journal: JournalPort;
   readonly #breaker: CircuitBreaker;
   readonly #protected: readonly string[];
+  /** Set once a patch lands; from then on, later issues may already be gone. */
+  #treeChanged = false;
   #state: RunState = 'IDLE';
 
   constructor(options: RunnerOptions) {
@@ -182,6 +184,16 @@ export class Runner {
     }
 
     this.#to('TRIAGING', issue.signature);
+
+    // Issues were detected once, up front. A fix that has landed since can cure
+    // others too (a type error that was also failing the tests), so re-measure
+    // before paying for a proposal. Only after something landed: until then the
+    // detection is still current, and re-running it would cost time for nothing.
+    if (this.#treeChanged && (await detector.verify(issue, ctx))) {
+      const reason = 'already healthy: resolved by an earlier fix in this run';
+      this.#to('RESOLVED', issue.signature, { reason });
+      return { issue, state: 'RESOLVED', attempts: 0, reason, replayed: false };
+    }
 
     // What already failed for this issue, fed to the next proposal so a retry is
     // a different guess rather than the same prompt paid for twice (D-018).
@@ -328,6 +340,15 @@ export class Runner {
     }
 
     this.#breaker.recordSuccess();
+    this.#treeChanged = true;
+
+    // One commit per verified fix, named for what it fixed. The history then reads
+    // as a list of repairs, each revertible on its own, and the tree is clean for
+    // the next issue's checkpoint (D-023). A failed commit does not undo a
+    // measured heal; the next checkpoint will carry it.
+    const committed = await repo.commitAll(healCommitMessage(issue, detector, patch, replayed));
+    if (committed === null) ctx.log.warn('fix verified but could not be committed', { signature: issue.signature });
+
     this.#to('HEALED', issue.signature, { replayed });
     await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: true, attempts, replayed });
 
@@ -370,7 +391,8 @@ export class Runner {
 
     // Re-entering the loop for a retry, or moving to the next issue, resets the
     // per-issue path; the graph describes one attempt, not the whole run.
-    const restarting = (from === 'REVERTED' || from === 'HEALED' || from === 'ESCALATED') && next === 'TRIAGING';
+    const restarting =
+      (from === 'REVERTED' || from === 'HEALED' || from === 'RESOLVED' || from === 'ESCALATED') && next === 'TRIAGING';
 
     if (!restarting && !canTransition(from, next)) {
       throw new Error(`illegal transition ${from} → ${next}`);
@@ -418,4 +440,16 @@ function dryRunReason(patch: Patch, allowlist: readonly string[], protectedPaths
     return `dry run: patch would be rejected: ${check.rejected.map((r) => `${r.path} (${r.reason})`).join(', ')}`;
   }
   return `dry run: would edit ${patch.edits.map((e) => e.path).join(', ')}`;
+}
+
+function healCommitMessage(issue: Issue, detector: Detector, patch: Patch, replayed: boolean): string {
+  const files = patch.edits.map((edit) => edit.path).join(', ');
+  return [
+    `self-heal: fix ${issue.kind} (${issue.signature.slice(0, 8)})`,
+    '',
+    patch.rationale,
+    '',
+    `Files: ${files}`,
+    `Verified by re-running detector "${detector.id}".${replayed ? ' Replayed from the journal.' : ''}`,
+  ].join('\n');
 }

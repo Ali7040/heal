@@ -72,6 +72,30 @@ class FileDetector implements Detector {
   }
 }
 
+/** Two issues from one root cause — both healthy exactly when the file is fixed. */
+class TwinDetector extends FileDetector {
+  override readonly id = 'twin';
+  verifications = 0;
+
+  override async detect(): Promise<Issue[]> {
+    const [issue] = await super.detect();
+    if (issue === undefined) return [];
+    return [
+      { ...issue, detectorId: this.id, signature: 'sig-a' },
+      { ...issue, detectorId: this.id, signature: 'sig-b' },
+    ];
+  }
+
+  override async verify(): Promise<boolean> {
+    this.verifications += 1;
+    return super.verify();
+  }
+}
+
+async function commitCount(box: Sandbox): Promise<number> {
+  return Number((await box.git.git('rev-list', '--count', 'HEAD')).stdout.trim());
+}
+
 function fixerReturning(edits: Patch['edits']): Fixer {
   return {
     id: 'stub',
@@ -415,6 +439,70 @@ describe('Runner', () => {
     await runner.run();
 
     expect(recorded[0]?.patch.edits[0]?.base).toBe(hashOf(BROKEN));
+  });
+
+  it('leaves one named commit per verified fix, and no empty checkpoints (D-023)', async () => {
+    sandbox = await brokenSandbox();
+    const before = await commitCount(sandbox);
+    const { runner } = await makeRunner(sandbox, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]));
+
+    await runner.run();
+
+    expect(await commitCount(sandbox)).toBe(before + 1);
+    const message = (await sandbox.git.git('log', '-1', '--format=%B')).stdout;
+    expect(message).toMatch(/^self-heal: fix wrong-value \(sig-valu\)/);
+    expect(message).toContain('Verified by re-running detector "file"');
+    // Nothing left dirty for a human to wonder about.
+    expect(await sandbox.git.isClean()).toBe(true);
+  });
+
+  it('leaves history untouched when every attempt fails', async () => {
+    sandbox = await brokenSandbox();
+    const head = await sandbox.git.currentCommit();
+    const { runner } = await makeRunner(
+      sandbox,
+      fixerReturning([{ path: 'src/value.mjs', contents: 'export const value = 999;\n' }]),
+    );
+
+    const report = await runner.run();
+
+    expect(report.outcomes[0]?.state).toBe('ESCALATED');
+    expect(await sandbox.git.currentCommit()).toBe(head);
+    expect(await sandbox.git.isClean()).toBe(true);
+  });
+
+  it('resolves an issue an earlier fix already cured, without a model call (D-022)', async () => {
+    sandbox = await brokenSandbox();
+    // Two issues, one root cause: both are measured by the same file.
+    const detector = new TwinDetector(sandbox.dir);
+    let proposals = 0;
+    const fixer: Fixer = {
+      id: 'counting',
+      propose: async (diagnosis) => {
+        proposals += 1;
+        return { fixerId: 'counting', signature: diagnosis.issue.signature, edits: [{ path: 'src/value.mjs', contents: FIXED }], rationale: 'fix' };
+      },
+    };
+    const { runner } = await makeRunner(sandbox, fixer, { detectors: [detector] });
+
+    const report = await runner.run();
+
+    expect(report.outcomes.map((o) => o.state)).toEqual(['HEALED', 'RESOLVED']);
+    expect(proposals).toBe(1);
+    // One verify for the fix, one to find the second issue already gone. No more.
+    expect(detector.verifications).toBe(2);
+  });
+
+  it('does not re-measure before any fix has landed', async () => {
+    sandbox = await brokenSandbox();
+    const detector = new TwinDetector(sandbox.dir);
+    const { runner } = await makeRunner(sandbox, fixerReturning([]), { detectors: [detector] });
+
+    const report = await runner.run();
+
+    expect(report.outcomes.map((o) => o.state)).toEqual(['ESCALATED', 'ESCALATED']);
+    // Nothing was ever applied, so the up-front detection stayed current.
+    expect(detector.verifications).toBe(0);
   });
 
   it('does nothing at all when there is nothing to detect', async () => {
