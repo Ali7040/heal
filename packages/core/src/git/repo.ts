@@ -99,8 +99,22 @@ export class GitRepo {
    * Invariant 1. Returns the commit SHA to roll back to, or `null` if the
    * checkpoint could not be created — in which case the caller must not mutate
    * anything.
+   *
+   * A clean tree already *is* a checkpoint: HEAD restores it exactly. Committing
+   * anyway would leave an empty "checkpoint" in the user's history for every
+   * attempt, so a commit is made only when there is something to protect — or
+   * when the repository has no commit to point at yet (D-023).
    */
   async checkpoint(message: string): Promise<string | null> {
+    if (await this.isClean()) {
+      const head = await this.currentCommit();
+      if (head !== null) return head;
+    }
+    return this.commitAll(message, { allowEmpty: true });
+  }
+
+  /** Stage everything and commit it under this tool's identity. SHA, or `null`. */
+  async commitAll(message: string, options: { readonly allowEmpty?: boolean } = {}): Promise<string | null> {
     const staged = await this.git('add', '-A');
     if (!staged.ok) return null;
 
@@ -110,7 +124,7 @@ export class GitRepo {
       '-c',
       `user.email=${this.#authorEmail}`,
       'commit',
-      '--allow-empty',
+      ...(options.allowEmpty === true ? ['--allow-empty'] : []),
       '-q',
       '-m',
       message,

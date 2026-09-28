@@ -96,6 +96,16 @@ class CountingFixer implements Fixer {
   }
 }
 
+/**
+ * The regression comes back the way regressions do: as a commit. A heal is itself
+ * committed (D-023), so an uncommitted edit here would be a dirty tree — which the
+ * next run rightly refuses to touch.
+ */
+async function regress(dir: string): Promise<void> {
+  await writeFile(join(dir, FILE), BROKEN, 'utf8');
+  await new GitRepo({ dir }).commitAll('the regression comes back');
+}
+
 async function runOnce(dir: string, fixer: Fixer, memory: Journal) {
   const ctx: RunContext = {
     repoRoot: dir,
@@ -131,7 +141,7 @@ describe('a journal across two runs', () => {
     expect(fixer.calls).toBe(1);
 
     // The regression comes back — a revert, a bad merge, a colleague's branch.
-    await writeFile(join(sandbox.dir, FILE), BROKEN, 'utf8');
+    await regress(sandbox.dir);
 
     const second = await runOnce(sandbox.dir, fixer, journal);
     expect(second.outcomes[0]?.state).toBe('HEALED');
@@ -150,7 +160,7 @@ describe('a journal across two runs', () => {
     await runOnce(sandbox.dir, fixer, first);
     first.close();
 
-    await writeFile(join(sandbox.dir, FILE), BROKEN, 'utf8');
+    await regress(sandbox.dir);
 
     // A fresh handle on the same file, as the next `self-heal run` would open it.
     journal = await openJournal(path);
@@ -223,7 +233,7 @@ describe('a journal across two runs', () => {
     first.close();
 
     await rm(path, { force: true });
-    await writeFile(join(sandbox.dir, FILE), BROKEN, 'utf8');
+    await regress(sandbox.dir);
 
     // Losing the journal costs money, never correctness: the loop just pays for
     // a fresh proposal, exactly as it did the first time.
