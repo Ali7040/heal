@@ -22,6 +22,10 @@ import type { Issue } from '@self-heal/core/contracts/issue';
 import { runCommand } from '@self-heal/core/process';
 import { computeSignature } from '@self-heal/core/signature';
 
+import { findLocations } from './locations.js';
+
+export { findLocations, MAX_REPORTED_LOCATIONS } from './locations.js';
+
 export interface CommandDetectorOptions {
   /** Stable id — it ends up in every issue this detector produces. */
   readonly id?: string;
@@ -58,6 +62,12 @@ export class CommandDetector implements Detector {
     const location: Issue['location'] = firstEditable === undefined ? {} : { file: firstEditable };
     const expected = { exitCode: 0 };
     const actual = { exitCode: result.exitCode, failure: fingerprint(result.output) };
+    // Where the output points. Not hashed: it guides the diagnosis, it does not
+    // define the issue, so a shifted line is still the same bug (D-024).
+    const related = await findLocations(result.output, {
+      repoRoot: ctx.repoRoot,
+      ...(this.#options.editable !== undefined ? { editable: this.#options.editable } : {}),
+    });
 
     return [
       {
@@ -70,6 +80,7 @@ export class CommandDetector implements Detector {
         // The raw output is evidence and lives on disk. Only the fingerprint —
         // small, stable, hashable — travels inside the issue.
         evidence: [],
+        ...(related.length > 0 ? { related } : {}),
         severity: this.#options.severity ?? 'high',
         detectedAt: new Date().toISOString(),
       },

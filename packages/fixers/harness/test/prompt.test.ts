@@ -38,4 +38,12 @@ describe('buildPrompt', () => {
     expect(prompt).toMatch(/Earlier attempts at this issue were measured and FAILED/);
     expect(prompt).toContain('1. Edited src/value.mjs ("set value to 999") — verification failed; tree restored');
   });
+
+  it('names every reported location, even those whose slice did not fit', () => {
+    const prompt = buildPrompt({
+      ...diagnosis,
+      issue: { ...diagnosis.issue, related: [{ file: 'src/value.mjs', line: 1 }, { file: 'src/other.mjs', line: 40 }] },
+    });
+    expect(prompt).toContain('Reported at: src/value.mjs:1, src/other.mjs:40');
+  });
 });

@@ -42,6 +42,13 @@ export interface Issue {
   readonly expected: unknown;
   readonly actual: unknown;
   readonly evidence: readonly EvidenceRef[];
+  /**
+   * Places the measurement's own output pointed at — `src/a.ts:12` in a stack
+   * trace or a compiler error — most relevant first. Where to *look*, not what the
+   * issue *is*: excluded from the signature, so a line shifting between runs does
+   * not split one bug into two identities (D-024).
+   */
+  readonly related?: readonly IssueLocation[];
   readonly severity: Severity;
   /** ISO-8601. */
   readonly detectedAt: string;

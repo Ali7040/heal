@@ -86,6 +86,10 @@ importers:
       '@self-heal/core':
         specifier: workspace:*
         version: link:../../core
+    devDependencies:
+      '@self-heal/testkit':
+        specifier: workspace:*
+        version: link:../../testkit
 
   packages/detectors/contract:
     dependencies:

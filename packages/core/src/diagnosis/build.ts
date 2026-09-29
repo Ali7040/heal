@@ -6,7 +6,9 @@
  * growing the context window is the failure mode the project exists to avoid
  * (AGENTS.md).
  *
- * Two cases, because detectors report two kinds of location (D-019):
+ * Lines the measurement's own output reported (`issue.related`, D-024) are sliced
+ * first; then the issue's location; then extra files. Per target, two cases,
+ * because a target either has a line or does not (D-019):
  *
  *   - **A line is known.** The slice is the enclosing declaration — the largest
  *     function, method, or class around the line that fits the line limit. A
@@ -57,20 +59,26 @@ export async function buildDiagnosis(issue: Issue, options: BuildDiagnosisOption
   const contextLines = options.contextLines ?? 40;
   const budget = options.budgetBytes ?? DIAGNOSIS_SLICE_BUDGET_BYTES;
 
-  const candidates = [issue.location.file, ...(options.extraFiles ?? [])].filter(
-    (path): path is string => typeof path === 'string' && path !== '',
-  );
+  // Most precise first: the lines the measurement's own output pointed at (D-024),
+  // then the issue's location, then extra files. Each line belongs to its own file
+  // only — an extra file is always unlocated.
+  const targets: { readonly path: string; readonly line: number | undefined }[] = [
+    ...(issue.related ?? []).map((related) => ({ path: related.file ?? '', line: related.line })),
+    { path: issue.location.file ?? '', line: issue.location.line },
+    ...(options.extraFiles ?? []).map((path) => ({ path, line: undefined })),
+  ].filter((target) => target.path !== '');
 
   const slices: CodeSlice[] = [];
+  const sources = new Map<string, string | null>();
   let spent = 0;
 
-  for (const path of unique(candidates)) {
-    const source = await readFileOrNull(join(options.repoRoot, path));
-    if (source === null) continue;
+  for (const { path, line } of targets) {
+    if (covered(slices, path, line)) continue;
 
-    // The reported line belongs to the issue's own file. Applied to an extra
-    // file it would point at an unrelated line, so extras are treated as unlocated.
-    const line = path === issue.location.file ? issue.location.line : undefined;
+    if (!sources.has(path)) sources.set(path, await readFileOrNull(join(options.repoRoot, path)));
+    const source = sources.get(path);
+    if (source === null || source === undefined) continue;
+
     const slice =
       line === undefined ? sliceUnlocated(path, source) : sliceAround(path, source, line, contextLines);
     const cost = Buffer.byteLength(slice.source, 'utf8');
@@ -243,6 +251,12 @@ async function readFileOrNull(path: string): Promise<string | null> {
   }
 }
 
-function unique<T>(values: readonly T[]): T[] {
-  return [...new Set(values)];
+/**
+ * Already shown: a line inside an existing slice of the file, or any view at all
+ * of a file when the target has no line. Two errors in one function cost one slice.
+ */
+function covered(slices: readonly CodeSlice[], path: string, line: number | undefined): boolean {
+  return slices.some(
+    (slice) => slice.path === path && (line === undefined || (slice.startLine <= line && line <= slice.endLine)),
+  );
 }

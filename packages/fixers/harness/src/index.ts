@@ -112,6 +112,10 @@ export function buildPrompt(diagnosis: Diagnosis): string {
     `A deterministic check detected a ${issue.kind}.`,
     '',
     `Location: ${formatLocation(issue)}`,
+    // Named even when the budget left their slice out, so the model can read them.
+    ...(issue.related !== undefined && issue.related.length > 0
+      ? [`Reported at: ${issue.related.map((r) => `${r.file ?? '?'}${r.line !== undefined ? `:${r.line}` : ''}`).join(', ')}`]
+      : []),
     `Expected: ${JSON.stringify(issue.expected)}`,
     `Actual:   ${JSON.stringify(issue.actual)}`,
     '',

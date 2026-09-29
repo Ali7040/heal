@@ -29,5 +29,8 @@
   },
   "dependencies": {
     "@self-heal/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@self-heal/testkit": "workspace:*"
   }
 }

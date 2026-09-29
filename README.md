@@ -111,6 +111,12 @@ self-heal journal       # what it remembers, and what that has saved
 your harness costs. `--dry-run` and `--fixer noop` are free, and detect and report
 exactly the same issues.
 
+A failing command's output is read for `file:line` references — tsc, eslint,
+vitest/jest/node stack traces, pytest and Python tracebacks, go, rustc — and the
+model is shown the function each one points into, rather than a whole file. A
+reference to anything that is not a file in your repository is ignored, and files
+the check may edit are ranked above the test that noticed.
+
 `--only` narrows a run to named detectors, so iterating on one does not pay for a
 server boot and a screenshot every loop. A name matching nothing is an error, not
 an empty run — a typo that silently measured nothing would report zero issues,

@@ -148,6 +148,25 @@ describe('buildDiagnosis', () => {
     expect(extra?.source).toBe(PY);
   });
 
+  it('slices around the lines the output reported, and skips the outline once a file is covered', async () => {
+    sandbox = await Sandbox.create({ files: { 'a.ts': TS }, prefix: 'diag-test-' });
+    const issue: Issue = {
+      ...issueAt('a.ts'),
+      related: [
+        { file: 'a.ts', line: 14 },
+        { file: 'a.ts', line: 15 }, // same method — no second slice
+        { file: 'a.ts', line: 5 },
+      ],
+    };
+
+    const diagnosis = await buildDiagnosis(issue, { repoRoot: sandbox.dir, editableFiles: ['a.ts'], contextLines: 3 });
+
+    expect(diagnosis.slices.map((s) => [s.startLine, s.endLine])).toEqual([
+      [12, 16],
+      [3, 7],
+    ]);
+  });
+
   it('skips a file over budget without dropping the smaller files after it', async () => {
     const big = Array.from({ length: 400 }, (_, i) => `const v${i} = ${i};`).join('\n');
     sandbox = await Sandbox.create({ files: { 'big.ts': big, 'small.ts': 'export const s = 1;\n' }, prefix: 'diag-test-' });
