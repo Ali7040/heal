@@ -85,6 +85,8 @@ export interface SelfHealConfig {
   readonly harness: string;
   readonly attemptCap: number;
   readonly failureThreshold: number;
+  /** Re-run every detector after a fix and revert it if it broke another check. Default true (D-025). */
+  readonly collateral: boolean;
   readonly evidenceDir: string;
   /** Outcome journal, relative to the repo root. Gitignored by `self-heal init`. */
   readonly journalPath: string;
@@ -186,6 +188,7 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
     attemptCap: typeof record['attemptCap'] === 'number' ? record['attemptCap'] : DEFAULTS.attemptCap,
     failureThreshold:
       typeof record['failureThreshold'] === 'number' ? record['failureThreshold'] : DEFAULTS.failureThreshold,
+    collateral: record['collateral'] !== false,
     evidenceDir: typeof record['evidenceDir'] === 'string' ? record['evidenceDir'] : DEFAULTS.evidenceDir,
     journalPath: typeof record['journalPath'] === 'string' ? record['journalPath'] : DEFAULTS.journalPath,
   };

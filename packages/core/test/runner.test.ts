@@ -72,6 +72,43 @@ class FileDetector implements Detector {
   }
 }
 
+/** Healthy exactly when one file has the expected contents. */
+class EqualsDetector implements Detector {
+  constructor(
+    readonly id: string,
+    private readonly dir: string,
+    private readonly path: string,
+    private readonly expected: string,
+  ) {}
+
+  async #healthy(): Promise<boolean> {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    return (await readFile(join(this.dir, this.path), 'utf8')) === this.expected;
+  }
+
+  async detect(): Promise<Issue[]> {
+    if (await this.#healthy()) return [];
+    return [
+      {
+        signature: `sig-${this.id}`,
+        detectorId: this.id,
+        kind: 'wrong-contents',
+        location: { file: this.path },
+        expected: this.expected,
+        actual: null,
+        evidence: [],
+        severity: 'high',
+        detectedAt: new Date().toISOString(),
+      },
+    ];
+  }
+
+  async verify(): Promise<boolean> {
+    return this.#healthy();
+  }
+}
+
 /** Two issues from one root cause — both healthy exactly when the file is fixed. */
 class TwinDetector extends FileDetector {
   override readonly id = 'twin';
@@ -503,6 +540,152 @@ describe('Runner', () => {
     expect(report.outcomes.map((o) => o.state)).toEqual(['ESCALATED', 'ESCALATED']);
     // Nothing was ever applied, so the up-front detection stayed current.
     expect(detector.verifications).toBe(0);
+  });
+
+  describe('collateral check (D-025)', () => {
+    const OTHER_OK = 'export const other = true;\n';
+    const OTHER_BROKEN = 'export const other = false;\n';
+
+    async function twoFileSandbox(other = OTHER_OK): Promise<Sandbox> {
+      return Sandbox.create({ files: { 'src/value.mjs': BROKEN, 'src/other.mjs': other }, prefix: 'runner-test-' });
+    }
+
+    function bothDetectors(box: Sandbox): Detector[] {
+      return [new FileDetector(box.dir), new EqualsDetector('other', box.dir, 'src/other.mjs', OTHER_OK)];
+    }
+
+    it('reverts a fix that passes its own check but breaks another', async () => {
+      sandbox = await twoFileSandbox();
+      const box = sandbox;
+      const { runner } = await makeRunner(
+        box,
+        fixerReturning([
+          { path: 'src/value.mjs', contents: FIXED },
+          { path: 'src/other.mjs', contents: OTHER_BROKEN },
+        ]),
+        { detectors: bothDetectors(box), attemptCap: 1 },
+      );
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('ESCALATED');
+      expect(report.outcomes[0]?.reason).toContain('broke other (wrong-contents at src/other.mjs)');
+      expect(await box.read('src/value.mjs')).toBe(BROKEN);
+      expect(await box.read('src/other.mjs')).toBe(OTHER_OK);
+    });
+
+    it('tells the retry what the first attempt broke', async () => {
+      sandbox = await twoFileSandbox();
+      const box = sandbox;
+      const seen: Diagnosis[] = [];
+      const fixer: Fixer = {
+        id: 'learns',
+        propose: async (diagnosis) => {
+          seen.push(diagnosis);
+          const careless = diagnosis.priorAttempts === undefined;
+          return {
+            fixerId: 'learns',
+            signature: diagnosis.issue.signature,
+            edits: [
+              { path: 'src/value.mjs', contents: FIXED },
+              ...(careless ? [{ path: 'src/other.mjs', contents: OTHER_BROKEN }] : []),
+            ],
+            rationale: careless ? 'rewrite both' : 'only the value',
+          };
+        },
+      };
+      const { runner } = await makeRunner(box, fixer, { detectors: bothDetectors(box) });
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('HEALED');
+      expect(seen[1]?.priorAttempts?.[0]?.reason).toContain('broke other');
+    });
+
+    it('does not blame a fix for a check that was already failing', async () => {
+      sandbox = await twoFileSandbox(OTHER_BROKEN);
+      const box = sandbox;
+      const { runner } = await makeRunner(box, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]), {
+        detectors: bothDetectors(box),
+        attemptCap: 1,
+      });
+
+      const report = await runner.run();
+
+      // The first issue heals despite the second still failing; the second's own
+      // proposal does not fix it and escalates on its own merits.
+      expect(report.outcomes.map((o) => o.state)).toEqual(['HEALED', 'ESCALATED']);
+    });
+
+    it('catches a later fix re-breaking something healed earlier in the run', async () => {
+      sandbox = await twoFileSandbox(OTHER_BROKEN);
+      const box = sandbox;
+      const fixer: Fixer = {
+        id: 'clumsy',
+        propose: async (diagnosis) => ({
+          fixerId: 'clumsy',
+          signature: diagnosis.issue.signature,
+          edits:
+            diagnosis.issue.detectorId === 'file'
+              ? [{ path: 'src/value.mjs', contents: FIXED }]
+              : // Fixes "other" by putting the first bug back.
+                [
+                  { path: 'src/other.mjs', contents: OTHER_OK },
+                  { path: 'src/value.mjs', contents: BROKEN },
+                ],
+          rationale: 'clumsy',
+        }),
+      };
+      const { runner } = await makeRunner(box, fixer, { detectors: bothDetectors(box), attemptCap: 1 });
+
+      const report = await runner.run();
+
+      expect(report.outcomes.map((o) => o.state)).toEqual(['HEALED', 'ESCALATED']);
+      expect(report.outcomes[1]?.reason).toContain('broke file');
+      expect(await box.read('src/value.mjs')).toBe(FIXED);
+    });
+
+    it('counts a detector that cannot run against the patch as broken', async () => {
+      sandbox = await brokenSandbox();
+      const box = sandbox;
+      let runs = 0;
+      const fragile: Detector = {
+        id: 'fragile',
+        detect: async () => {
+          runs += 1;
+          if (runs > 1) throw new Error('server would not boot');
+          return [];
+        },
+        verify: async () => true,
+      };
+      const { runner } = await makeRunner(box, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]), {
+        detectors: [new FileDetector(box.dir), fragile],
+        attemptCap: 1,
+      });
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('ESCALATED');
+      expect(report.outcomes[0]?.reason).toContain('fragile (could not run: server would not boot)');
+      expect(await box.read('src/value.mjs')).toBe(BROKEN);
+    });
+
+    it('can be switched off, trading the guarantee for one less detection per heal', async () => {
+      sandbox = await twoFileSandbox();
+      const box = sandbox;
+      const { runner } = await makeRunner(
+        box,
+        fixerReturning([
+          { path: 'src/value.mjs', contents: FIXED },
+          { path: 'src/other.mjs', contents: OTHER_BROKEN },
+        ]),
+        { detectors: bothDetectors(box), collateralCheck: false },
+      );
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('HEALED');
+    });
   });
 
   it('does nothing at all when there is nothing to detect', async () => {

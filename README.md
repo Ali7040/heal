@@ -128,6 +128,12 @@ nothing it does outlives the attempt. A checkpoint precedes every write, a dirty
 tree stops the run, and `HEALED` still means only one thing: the check that found
 the problem passes now.
 
+A fix must also break nothing else. Once it passes its own check, every detector
+runs again; if any check that was passing now fails, the fix is reverted and the
+retry is told what it broke. A check that was already failing does not count
+against it. This costs one full detection per fix — `"collateral": false` in the
+config turns it off, and `--only` narrows it along with everything else.
+
 What a run leaves in your history is one commit per verified fix, authored by
 `self-heal` and named for what it fixed — so each can be reviewed or reverted on
 its own (`git log --author=self-heal`). A failed attempt leaves nothing: no empty

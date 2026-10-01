@@ -172,6 +172,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     protectedPaths: config.protected,
     attemptCap: config.attemptCap,
     failureThreshold: config.failureThreshold,
+    collateralCheck: config.collateral,
     allowDirty: values['allow-dirty'] === true,
     diagnose: (issue: Issue) =>
       buildDiagnosis(issue, {

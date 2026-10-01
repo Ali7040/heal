@@ -49,6 +49,12 @@ export interface RunnerOptions {
   readonly journal?: JournalPort;
   readonly attemptCap?: number;
   readonly failureThreshold?: number;
+  /**
+   * After a fix passes its own detector, re-run every detector and revert if a
+   * check that was passing now fails (D-025). Default on; off trades that
+   * guarantee for one less full detection per heal.
+   */
+  readonly collateralCheck?: boolean;
   /** Proceed even though the working tree has uncommitted changes (invariant 5). */
   readonly allowDirty?: boolean;
   /** Called on every state change — the loop's timeline, used by logs and the demo. */
@@ -96,6 +102,12 @@ export class Runner {
   readonly #protected: readonly string[];
   /** Set once a patch lands; from then on, later issues may already be gone. */
   #treeChanged = false;
+  /**
+   * Checks known to be failing right now, by `checkKey`. Starts as everything
+   * detected; shrinks as issues heal. A fix may leave these failing — they are
+   * someone else's issue — but must not add to them.
+   */
+  readonly #failing = new Set<string>();
   #state: RunState = 'IDLE';
 
   constructor(options: RunnerOptions) {
@@ -140,6 +152,7 @@ export class Runner {
       ctx.log.info('detector finished', { detector: detector.id, issues: found.length });
       issues.push(...found);
     }
+    for (const issue of issues) this.#failing.add(checkKey(issue));
 
     if (issues.length === 0) {
       this.#to('IDLE', undefined, { issues: 0 });
@@ -190,6 +203,7 @@ export class Runner {
     // before paying for a proposal. Only after something landed: until then the
     // detection is still current, and re-running it would cost time for nothing.
     if (this.#treeChanged && (await detector.verify(issue, ctx))) {
+      this.#failing.delete(checkKey(issue));
       const reason = 'already healthy: resolved by an earlier fix in this run';
       this.#to('RESOLVED', issue.signature, { reason });
       return { issue, state: 'RESOLVED', attempts: 0, reason, replayed: false };
@@ -339,8 +353,22 @@ export class Runner {
       return { issue, state: 'REVERTED', attempts, patch, reason, replayed };
     }
 
+    // Its own check passes. That proves the fix fixed *this*; it does not prove the
+    // fix broke nothing else — a patch can make one test pass by breaking another.
+    // Still part of verification: HEALED requires both (D-025).
+    const broke = this.#options.collateralCheck === false ? [] : await this.#collateral(issue);
+    if (broke.length > 0) {
+      await repo.restore(restorePoint);
+      this.#breaker.recordFailure();
+      const reason = `fixed its own check but broke ${broke.join(', ')}; tree restored`;
+      this.#to('REVERTED', issue.signature, { reason, broke });
+      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts, replayed });
+      return { issue, state: 'REVERTED', attempts, patch, reason, replayed };
+    }
+
     this.#breaker.recordSuccess();
     this.#treeChanged = true;
+    this.#failing.delete(checkKey(issue));
 
     // One commit per verified fix, named for what it fixed. The history then reads
     // as a list of repairs, each revertible on its own, and the tree is clean for
@@ -360,6 +388,39 @@ export class Runner {
       reason: replayed ? 'replayed a previously verified patch' : 'verified by the originating detector',
       replayed,
     };
+  }
+
+  /**
+   * Every detector, re-run on the patched tree. Returns the checks failing now
+   * that were not failing before — empty means nothing new broke.
+   *
+   * Compared by `checkKey`, not by signature: a check that was already failing
+   * may fail *differently* now (one of its failures fixed, another remaining),
+   * which changes its signature without being a new break.
+   */
+  async #collateral(issue: Issue): Promise<string[]> {
+    const { ctx, detectors } = this.#options;
+    const own = checkKey(issue);
+    const broke: string[] = [];
+
+    for (const detector of detectors) {
+      let found: Issue[];
+      try {
+        found = await detector.detect(ctx);
+      } catch (error) {
+        // A patch is on disk. A detector that cannot run against it is not
+        // evidence of safety, so it counts against the patch.
+        broke.push(`${detector.id} (could not run: ${error instanceof Error ? error.message : String(error)})`);
+        continue;
+      }
+      for (const now of found) {
+        const key = checkKey(now);
+        if (key !== own && !this.#failing.has(key)) broke.push(describeCheck(now));
+      }
+    }
+
+    if (broke.length > 0) ctx.log.warn('fix broke other checks', { signature: issue.signature, broke });
+    return [...new Set(broke)];
   }
 
   #escalate(issue: Issue, reason: string, patch?: Patch): IssueOutcome {
@@ -452,4 +513,16 @@ function healCommitMessage(issue: Issue, detector: Detector, patch: Patch, repla
     `Files: ${files}`,
     `Verified by re-running detector "${detector.id}".${replayed ? ' Replayed from the journal.' : ''}`,
   ].join('\n');
+}
+
+/** Which check an issue is — its detector, kind, and place — regardless of how it fails today. */
+function checkKey(issue: Issue): string {
+  const { file, line, endpoint, selector } = issue.location;
+  return JSON.stringify([issue.detectorId, issue.kind, file ?? null, line ?? null, endpoint ?? null, selector ?? null]);
+}
+
+function describeCheck(issue: Issue): string {
+  const { file, endpoint, selector } = issue.location;
+  const where = endpoint ?? selector ?? file;
+  return `${issue.detectorId} (${issue.kind}${where !== undefined ? ` at ${where}` : ''})`;
 }
