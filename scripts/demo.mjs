@@ -21,18 +21,14 @@
  */
 import { GitRepo } from '@self-heal/core/git/repo';
 import { buildDiagnosis } from '@self-heal/core/diagnosis/build';
-import { silentLogger } from '@self-heal/core/logger';
 import { Runner } from '@self-heal/core/runner/runner';
-import { CommandDetector } from '@self-heal/detector-command';
-import { ContractDetector } from '@self-heal/detector-contract';
-import { VisualDetector } from '@self-heal/detector-visual';
 import { NoopFixer } from '@self-heal/fixer-noop';
 import { HarnessFixer } from '@self-heal/fixer-harness';
 import { Sandbox } from '@self-heal/testkit/sandbox';
-import { snapshotDir } from '@self-heal/testkit/snapshot';
-import { freePort } from '@self-heal/testkit/server';
-import { CHART_FIXED_SOURCE, FIXTURES, getFixture } from '@self-heal/testkit/fixtures';
+import { FIXTURES, getFixture } from '@self-heal/testkit/fixtures';
 import { openJournal } from '@self-heal/journal/store';
+
+import { contextFor, prepareDetector, workspaceFrom } from './lib/fixture-loop.mjs';
 
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((arg) => arg.startsWith('--')));
@@ -66,17 +62,8 @@ console.log(`${DIM}${excerpt(fixture.files[fixture.primary])}${RESET}\n`);
 
 const started = Date.now();
 
-const { detector, describeMeasurement } = await buildDetector(fixture);
-
-/**
- * The harness never touches the demo repository: it gets a snapshot copied into
- * a second disposable sandbox, which is destroyed when the proposal is done.
- */
-async function createWorkspace() {
-  const files = await snapshotDir(sandbox.dir);
-  const workspace = await Sandbox.create({ files, prefix: 'self-heal-work-' });
-  return { dir: workspace.dir, dispose: () => workspace.dispose() };
-}
+const { detector, describeMeasurement } = await prepareDetector(fixture, sandbox);
+const createWorkspace = workspaceFrom(sandbox);
 
 const journal = await openJournal(`${sandbox.dir}/.self-heal/journal.sqlite`);
 
@@ -86,13 +73,7 @@ const makeRunner = () => new Runner({
   // which object is passed here. That is the Fixer boundary doing its job.
   fixer: heal ? new HarnessFixer({ harness: 'claude-code', createWorkspace }) : new NoopFixer(),
   repo: new GitRepo({ dir: sandbox.dir }),
-  ctx: {
-    repoRoot: sandbox.dir,
-    evidenceDir: `${sandbox.dir}/.self-heal/evidence`,
-    dryRun: !heal,
-    config: {},
-    log: silentLogger,
-  },
+  ctx: contextFor(sandbox, !heal),
   allowlist: [...fixture.editable],
   attemptCap: 2,
   diagnose: (issue) =>
@@ -173,86 +154,6 @@ if (!heal) {
 
 journal.close();
 await sandbox.dispose();
-
-/** Detector selection is data-driven — the fixture's shape decides, not a flag. */
-async function buildDetector(fixture_) {
-  if (fixture_.serve !== undefined && fixture_.id === 'chart-colour-collision') {
-    const port = await freePort();
-    const base = `http://127.0.0.1:${port}`;
-    const server = {
-      command: process.execPath,
-      args: [fixture_.serve.entry],
-      readyUrl: `${base}${fixture_.serve.readyPath}`,
-      env: { PORT: String(port) },
-    };
-
-    // A visual baseline has to be recorded from a picture someone approved, so the
-    // sandbox starts healthy, records, and only then does the regression land.
-    // That is the real workflow, not a shortcut for the demo.
-    const detector = new VisualDetector({
-      id: 'chart-ui',
-      views: fixture_.serve.endpoints.map((endpoint) => ({
-        name: endpoint.name,
-        url: `${base}${endpoint.path}`,
-        editable: [...fixture_.editable],
-      })),
-      server,
-    });
-
-    await sandbox.write(fixture_.primary, CHART_FIXED_SOURCE);
-    await detector.detect(baselineCtx());
-    await sandbox.write(fixture_.primary, fixture_.files[fixture_.primary]);
-    await new GitRepo({ dir: sandbox.dir }).checkpoint('demo: the regression lands');
-
-    return { detector, describeMeasurement: 'measuring: rendered pixels vs an approved baseline' };
-  }
-
-  if (fixture_.serve !== undefined) {
-    const port = await freePort();
-    const base = `http://127.0.0.1:${port}`;
-    return {
-      detector: new ContractDetector({
-        id: 'orders-api',
-        endpoints: fixture_.serve.endpoints.map((endpoint) => ({
-          name: endpoint.name,
-          url: `${base}${endpoint.path}`,
-          editable: [...fixture_.editable],
-        })),
-        // Booted fresh for detect and again for verify, so a fix on disk is
-        // actually the thing being measured the second time.
-        server: {
-          command: process.execPath,
-          args: [fixture_.serve.entry],
-          readyUrl: `${base}${fixture_.serve.readyPath}`,
-          env: { PORT: String(port) },
-        },
-      }),
-      describeMeasurement: 'measuring: live HTTP response vs recorded contract',
-    };
-  }
-
-  return {
-    detector: new CommandDetector({
-      id: 'fixture-check',
-      command: fixture_.check.command,
-      args: [...fixture_.check.args],
-      editable: [...fixture_.editable],
-      kind: 'check-failed',
-    }),
-    describeMeasurement: 'measuring: exit code of the fixture check',
-  };
-}
-
-/** The context used only to record the first baseline, before the loop runs. */
-function baselineCtx() {
-  return {
-    repoRoot: sandbox.dir,
-    evidenceDir: `${sandbox.dir}/.self-heal/evidence`,
-    dryRun: false,
-    config: {},
-    log: silentLogger,
-  };
-}
 
 function excerpt(source, limit = 14) {
   const lines = source.trim().split('\n');

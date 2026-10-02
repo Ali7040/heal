@@ -35,6 +35,19 @@ pnpm build && pnpm demo:journal                     # heal it, break it, watch i
 pnpm demo --list                                    # every fixture
 ```
 
+Whether a change actually makes fixes cheaper or likelier is measured, not argued:
+
+```bash
+pnpm bench                                     # free: prompt size per fixture, no model
+pnpm bench:live --runs 5                       # heal rate, attempts, $/heal, time
+node scripts/bench.mjs --live --compare .self-heal/bench/<before>.json
+```
+
+Every run is cold — a fresh repository and no journal — because a replay costs
+nothing and would only hide the model path being measured. Cost is reported per
+*heal*, not per run, and a harness that does not report its cost shows `—`, never
+`$0`.
+
 The second time it sees a bug, it does not ask a model:
 
 ```

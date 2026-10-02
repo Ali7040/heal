@@ -23,6 +23,8 @@
     "demo": "node scripts/demo.mjs",
     "demo:heal": "node scripts/demo.mjs --heal",
     "demo:journal": "node scripts/demo.mjs --heal --twice",
+    "bench": "node scripts/bench.mjs",
+    "bench:live": "node scripts/bench.mjs --live",
     "release:prepare": "node scripts/prepare-release.mjs",
     "release:check": "node scripts/verify-package.mjs",
     "release:publish": "pnpm build && node scripts/prepare-release.mjs && pnpm -r publish --access public"

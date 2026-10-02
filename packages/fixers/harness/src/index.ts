@@ -39,6 +39,25 @@ export interface HarnessFixerOptions {
    * choose between a temp-dir copy and a git worktree without touching this file.
    */
   readonly createWorkspace: (diagnosis: Diagnosis) => Promise<HarnessWorkspace>;
+  /**
+   * Called once per harness run with what it cost. Observation only — nothing it
+   * reports feeds a decision (D-001). This is how a benchmark, or a cost report,
+   * learns what a proposal was worth paying for (D-026).
+   */
+  readonly onInvoke?: (record: InvocationRecord) => void;
+}
+
+/** One harness run, as measured from outside it. */
+export interface InvocationRecord {
+  readonly signature: string;
+  readonly ok: boolean;
+  readonly failure: string | null;
+  readonly durationMs: number;
+  /** As the harness reported it; `null` when the harness does not say. */
+  readonly costUsd: number | null;
+  readonly turns: number | null;
+  /** Bytes of prompt sent — the part of the cost this project controls. */
+  readonly promptBytes: number;
 }
 
 export interface HarnessWorkspace {
@@ -52,22 +71,34 @@ export class HarnessFixer implements Fixer {
   readonly #profile: HarnessProfile;
   readonly #timeoutMs: number;
   readonly #createWorkspace: (diagnosis: Diagnosis) => Promise<HarnessWorkspace>;
+  readonly #onInvoke: ((record: InvocationRecord) => void) | undefined;
 
   constructor(options: HarnessFixerOptions) {
     this.#profile = typeof options.harness === 'string' ? getProfile(options.harness) : options.harness;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_HARNESS_TIMEOUT_MS;
     this.#createWorkspace = options.createWorkspace;
+    this.#onInvoke = options.onInvoke;
   }
 
   async propose(diagnosis: Diagnosis): Promise<Patch> {
     const workspace = await this.#createWorkspace(diagnosis);
 
     try {
+      const prompt = buildPrompt(diagnosis);
       const result = await invokeHarness({
         profile: this.#profile,
-        prompt: buildPrompt(diagnosis),
+        prompt,
         cwd: workspace.dir,
         timeoutMs: this.#timeoutMs,
+      });
+      this.#onInvoke?.({
+        signature: diagnosis.issue.signature,
+        ok: result.ok,
+        failure: result.failure,
+        durationMs: result.durationMs,
+        costUsd: result.summary?.costUsd ?? null,
+        turns: result.summary?.turns ?? null,
+        promptBytes: Buffer.byteLength(prompt, 'utf8'),
       });
 
       // A failed invocation yields an empty patch, never a throw. The runner
