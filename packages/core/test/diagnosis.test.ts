@@ -5,7 +5,13 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildDiagnosis, sliceAround, sliceUnlocated, WHOLE_FILE_BYTES } from '../src/diagnosis/build.js';
+import {
+  buildDiagnosis,
+  EDITABLE_FALLBACK_MAX_FILES,
+  sliceAround,
+  sliceUnlocated,
+  WHOLE_FILE_BYTES,
+} from '../src/diagnosis/build.js';
 import type { Issue } from '../src/contracts/issue.js';
 import { Sandbox } from '@self-heal/testkit/sandbox';
 
@@ -179,5 +185,51 @@ describe('buildDiagnosis', () => {
     });
 
     expect(diagnosis.slices.map((s) => s.path)).toEqual(['small.ts']);
+  });
+
+  describe('when nothing located the problem (D-027)', () => {
+    const PRICING = 'export function totalWithTax(cents, rate) {\n  return cents;\n}\n';
+
+    it("falls back to the check's editable files, rather than sending no code", async () => {
+      // The pricing fixture's shape: location is a glob, the output names no file.
+      sandbox = await Sandbox.create({
+        files: { 'src/pricing.mjs': PRICING, 'src/util.mjs': 'export const x = 1;\n', 'check.mjs': 'run();\n' },
+        prefix: 'diag-test-',
+      });
+
+      const diagnosis = await buildDiagnosis(issueAt('src/**/*.mjs'), {
+        repoRoot: sandbox.dir,
+        editableFiles: ['src/**/*.mjs'],
+      });
+
+      expect(diagnosis.slices.map((s) => s.path)).toEqual(['src/pricing.mjs', 'src/util.mjs']);
+      expect(diagnosis.slices[0]?.source).toBe(PRICING);
+    });
+
+    it('offers only tracked files — what the fixer sandbox will contain', async () => {
+      sandbox = await Sandbox.create({ files: { 'src/a.mjs': 'a\n' }, prefix: 'diag-test-' });
+      await sandbox.write('src/scratch.mjs', 'not committed\n');
+
+      const diagnosis = await buildDiagnosis(issueAt('src/**'), { repoRoot: sandbox.dir, editableFiles: ['src/**'] });
+
+      expect(diagnosis.slices.map((s) => s.path)).toEqual(['src/a.mjs']);
+    });
+
+    it('stops at a handful of files, so a broad glob is not the whole repository', async () => {
+      const files = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`src/f${String(i).padStart(2, '0')}.mjs`, `${i}\n`]));
+      sandbox = await Sandbox.create({ files, prefix: 'diag-test-' });
+
+      const diagnosis = await buildDiagnosis(issueAt('src/**'), { repoRoot: sandbox.dir, editableFiles: ['**'] });
+
+      expect(diagnosis.slices).toHaveLength(EDITABLE_FALLBACK_MAX_FILES);
+    });
+
+    it('is not used when anything else produced a slice', async () => {
+      sandbox = await Sandbox.create({ files: { 'a.ts': TS, 'src/other.mjs': 'x\n' }, prefix: 'diag-test-' });
+
+      const diagnosis = await buildDiagnosis(issueAt('a.ts', 5), { repoRoot: sandbox.dir, editableFiles: ['**'] });
+
+      expect(diagnosis.slices.map((s) => s.path)).toEqual(['a.ts']);
+    });
   });
 });

@@ -146,6 +146,16 @@ export class GitRepo {
     return (await this.git('clean', '-fd')).ok;
   }
 
+  /** Repository-relative POSIX paths of every tracked file, sorted; `null` if git cannot say. */
+  async trackedFiles(): Promise<string[] | null> {
+    const listed = await this.git('ls-files', '-z');
+    if (!listed.ok) return null;
+    return listed.stdout
+      .split('\0')
+      .filter((path) => path !== '')
+      .sort();
+  }
+
   async readFileAtHead(path: string): Promise<string | null> {
     const result = await this.git('show', `HEAD:${path}`);
     return result.ok ? result.stdout : null;

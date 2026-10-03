@@ -7,7 +7,8 @@
  * (AGENTS.md).
  *
  * Lines the measurement's own output reported (`issue.related`, D-024) are sliced
- * first; then the issue's location; then extra files. Per target, two cases,
+ * first; then the issue's location; then extra files. If none of that yields any
+ * code, the check's editable files stand in (D-027). Per target, two cases,
  * because a target either has a line or does not (D-019):
  *
  *   - **A line is known.** The slice is the enclosing declaration — the largest
@@ -34,6 +35,8 @@ import { join } from 'node:path';
 import type { CodeSlice, Diagnosis } from '../contracts/diagnosis.js';
 import { DIAGNOSIS_SLICE_BUDGET_BYTES } from '../contracts/diagnosis.js';
 import type { Issue } from '../contracts/issue.js';
+import { GitRepo } from '../git/repo.js';
+import { matches } from '../safety/allowlist.js';
 
 export interface BuildDiagnosisOptions {
   readonly repoRoot: string;
@@ -72,12 +75,12 @@ export async function buildDiagnosis(issue: Issue, options: BuildDiagnosisOption
   const sources = new Map<string, string | null>();
   let spent = 0;
 
-  for (const { path, line } of targets) {
-    if (covered(slices, path, line)) continue;
+  const add = async (path: string, line: number | undefined): Promise<void> => {
+    if (covered(slices, path, line)) return;
 
     if (!sources.has(path)) sources.set(path, await readFileOrNull(join(options.repoRoot, path)));
     const source = sources.get(path);
-    if (source === null || source === undefined) continue;
+    if (source === null || source === undefined) return;
 
     const slice =
       line === undefined ? sliceUnlocated(path, source) : sliceAround(path, source, line, contextLines);
@@ -86,13 +89,38 @@ export async function buildDiagnosis(issue: Issue, options: BuildDiagnosisOption
     // Skip rather than trim mid-file: a truncated slice that looks complete is
     // worse than one file fewer. Skip rather than stop: a smaller file later in
     // the list may still fit.
-    if (spent + cost > budget) continue;
+    if (spent + cost > budget) return;
 
     slices.push(slice);
     spent += cost;
+  };
+
+  for (const { path, line } of targets) await add(path, line);
+
+  // Nothing located the problem — a check whose output names no file, and whose
+  // location is a glob rather than a path. Sending no code at all leaves the model
+  // to search blind (D-027), so fall back to what the check says it is *about*: its
+  // editable files, as tracked by git, each whole if small or outlined if not.
+  if (slices.length === 0) {
+    for (const path of await editableTracked(options.repoRoot, options.editableFiles)) await add(path, undefined);
   }
 
   return { issue, slices, editableFiles: options.editableFiles };
+}
+
+/** Most files the editable fallback will consider, so `**` cannot mean "the repository". */
+export const EDITABLE_FALLBACK_MAX_FILES = 8;
+
+/**
+ * Tracked files matching the editable globs. Tracked, because that is exactly
+ * the set the fixer's sandbox is built from — `.gitignore` decides here too.
+ */
+async function editableTracked(repoRoot: string, editable: readonly string[]): Promise<string[]> {
+  if (editable.length === 0) return [];
+  const tracked = (await new GitRepo({ dir: repoRoot }).trackedFiles()) ?? [];
+  return tracked
+    .filter((path) => editable.some((glob) => matches(path, glob)))
+    .slice(0, EDITABLE_FALLBACK_MAX_FILES);
 }
 
 /** The enclosing declaration if one fits, else a line window. `line` is 1-based. */
