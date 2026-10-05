@@ -118,7 +118,15 @@ self-heal run --dry-run # detect, diagnose, propose — nothing written, nothing
 self-heal run           # the real thing
 self-heal run --only contracts   # just one detector, while iterating on it
 self-heal journal       # what it remembers, and what that has saved
+self-heal stats         # what it has spent, and what that bought
+self-heal stats --since 7d
 ```
+
+Every run ends with what it spent (`spent this run: $0.0412 over 2 model call(s)`),
+and `stats` adds it up from the journal: model calls, heals, cost per heal, and an
+estimate of what replays saved. Cost per heal counts every call, failed ones
+included. A harness that does not report its cost is shown as "at least $x",
+never as `$0`.
 
 `run` drives the agent harness you already have installed, so it costs whatever
 your harness costs. `--dry-run` and `--fixer noop` are free, and detect and report

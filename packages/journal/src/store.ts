@@ -60,6 +60,48 @@ export interface JournalStats {
 }
 
 /**
+ * One model call, as measured from outside it. Mirrors what a fixer can observe
+ * (the harness fixer's `onInvoke`), declared here so the journal depends on no
+ * fixer.
+ */
+export interface CallRecord {
+  readonly signature: string;
+  readonly ok: boolean;
+  readonly failure: string | null;
+  readonly durationMs: number;
+  /** `null` when the harness did not report it. Never recorded as zero. */
+  readonly costUsd: number | null;
+  readonly promptBytes: number;
+}
+
+/**
+ * What the loop has spent, and what it bought.
+ *
+ * The rules are the benchmark's (D-026), for the same reasons: cost is per
+ * *heal* — every call counts, including the ones that failed, because those were
+ * paid for too — and an unknown cost makes any total that includes it unknown.
+ */
+export interface SpendReport {
+  /** ISO-8601 lower bound, or `null` for all time. */
+  readonly since: string | null;
+  readonly calls: number;
+  readonly failedCalls: number;
+  /** Sum of the costs that were reported. A floor when `unknownCostCalls > 0`. */
+  readonly knownCostUsd: number;
+  readonly unknownCostCalls: number;
+  /** Fixes proposed by a model and verified by their detector. */
+  readonly heals: number;
+  /** Remembered fixes replayed and verified — no model call. */
+  readonly replays: number;
+  /** Measurements that failed: a proposal or a replay the detector rejected. */
+  readonly failedMeasurements: number;
+  readonly costPerHealUsd: number | null;
+  /** `replays × costPerHealUsd` — an estimate, and labelled as one wherever shown. */
+  readonly estimatedSavedUsd: number | null;
+  readonly promptBytes: number;
+}
+
+/**
  * One remembered outcome, as a person would want to read it.
  *
  * Deliberately without the patch body. Listing what is remembered is a question
@@ -95,6 +137,9 @@ export interface Journal extends JournalPort {
    * long one is a small cruelty that shows up the first time anyone tries it.
    */
   forget(signature: string): ForgetResult;
+  /** Record one model call. Observation only — nothing reads it to decide anything. */
+  recordCall(call: CallRecord): void;
+  spend(options?: { readonly since?: string }): SpendReport;
   close(): void;
 }
 
@@ -133,6 +178,14 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
       replays   = outcomes.replays + :saved
   `);
 
+  const insertMeasurement = db.prepare(
+    'INSERT INTO measurements (at, signature, verified, replayed) VALUES (?, ?, ?, ?)',
+  );
+  const insertCall = db.prepare(`
+    INSERT INTO calls (at, signature, ok, failure, cost_usd, duration_ms, prompt_bytes)
+    VALUES (:at, :signature, :ok, :failure, :cost, :duration, :prompt)
+  `);
+
   return {
     async lookup(signature: string): Promise<RecordedOutcome | undefined> {
       const row = select.get(signature) as OutcomeRow | undefined;
@@ -153,6 +206,10 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
     },
 
     async record(outcome: MeasuredOutcome): Promise<void> {
+      // Every measurement is counted, even one whose patch is too big to keep:
+      // the heal happened, and what it cost has to be divided by it.
+      insertMeasurement.run(new Date().toISOString(), outcome.signature, outcome.verified ? 1 : 0, outcome.replayed ? 1 : 0);
+
       const serialized = JSON.stringify(outcome.patch);
       if (Buffer.byteLength(serialized, 'utf8') > maxPatchBytes) return;
 
@@ -213,6 +270,62 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
         .prepare('SELECT COUNT(*) AS total, SUM(verified) AS verified, SUM(replays) AS replays FROM outcomes')
         .get() as { total: number; verified: number | null; replays: number | null };
       return { total: row.total, verified: row.verified ?? 0, replays: row.replays ?? 0 };
+    },
+
+    recordCall(call: CallRecord): void {
+      insertCall.run({
+        at: new Date().toISOString(),
+        signature: call.signature,
+        ok: call.ok ? 1 : 0,
+        failure: call.failure,
+        cost: call.costUsd,
+        duration: call.durationMs,
+        prompt: call.promptBytes,
+      });
+    },
+
+    spend(options = {}): SpendReport {
+      const since = options.since ?? null;
+      // ISO-8601 strings compare correctly as text, so the lower bound is a plain >=.
+      const floor = since ?? '';
+      const calls = db
+        .prepare(`
+          SELECT COUNT(*) AS calls,
+                 SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed,
+                 SUM(cost_usd) AS known,
+                 SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown,
+                 SUM(prompt_bytes) AS prompt
+          FROM calls WHERE at >= ?
+        `)
+        .get(floor) as { calls: number; failed: number | null; known: number | null; unknown: number | null; prompt: number | null };
+      const measured = db
+        .prepare(`
+          SELECT SUM(CASE WHEN verified = 1 AND replayed = 0 THEN 1 ELSE 0 END) AS heals,
+                 SUM(CASE WHEN verified = 1 AND replayed = 1 THEN 1 ELSE 0 END) AS replays,
+                 SUM(CASE WHEN verified = 0 THEN 1 ELSE 0 END) AS failed
+          FROM measurements WHERE at >= ?
+        `)
+        .get(floor) as { heals: number | null; replays: number | null; failed: number | null };
+
+      const heals = measured.heals ?? 0;
+      const replays = measured.replays ?? 0;
+      const unknownCostCalls = calls.unknown ?? 0;
+      const knownCostUsd = calls.known ?? 0;
+      const costPerHealUsd = heals === 0 || unknownCostCalls > 0 ? null : knownCostUsd / heals;
+
+      return {
+        since,
+        calls: calls.calls,
+        failedCalls: calls.failed ?? 0,
+        knownCostUsd,
+        unknownCostCalls,
+        heals,
+        replays,
+        failedMeasurements: measured.failed ?? 0,
+        costPerHealUsd,
+        estimatedSavedUsd: costPerHealUsd === null ? null : replays * costPerHealUsd,
+        promptBytes: calls.prompt ?? 0,
+      };
     },
 
     close(): void {

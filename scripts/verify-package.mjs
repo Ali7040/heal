@@ -178,6 +178,15 @@ try {
   }
   ok('detected the failing check, escalated it, and exited non-zero');
 
+  // The hand-off (D-028): the report names it, it exists, and it is under the
+  // gitignored evidence directory — the --only run below would halt on a dirty
+  // tree if it were not.
+  const handoff = /what was tried, and why it failed: (\S+)/.exec(report)?.[1];
+  if (handoff === undefined) fail(`the run report does not point at an escalation report:\n${report}`);
+  const handoffText = await readFile(join(target, handoff), 'utf8').catch(() => '');
+  if (!handoffText.startsWith('# Escalated: check-failed')) fail(`escalation report missing or malformed: ${handoff}`);
+  ok(`wrote the hand-off: ${handoff}`);
+
   step('--only narrows the run, and refuses a name it does not know');
   const narrowed = cli(['run', '--fixer', 'noop', '--only', 'smoke'], target, 1);
   if (!narrowed.includes('ESCALATED')) fail(`--only smoke did not run the smoke detector:
@@ -190,6 +199,14 @@ ${narrowed}`);
   step('the journal command works on a fresh install');
   cli(['journal'], target);
   ok('journal');
+
+  // The noop fixer never calls a model, so there is honestly nothing to report —
+  // and the command must say so rather than print a row of zero dollars.
+  step('the stats command works on a fresh install');
+  const stats = cli(['stats'], target);
+  if (!stats.includes('nothing measured yet')) fail(`stats on an unspent repo should say so:\n${stats}`);
+  cli(['stats', '--since', 'last week'], target, 2);
+  ok('stats, and a bad --since is refused');
 
   console.log(`\n✓ the published artifact works. ${byPackage.size} package(s) ready at 0.1.0.\n`);
 } finally {

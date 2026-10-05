@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Patch } from '@self-heal/core/contracts/patch';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openJournal, type Journal } from '../src/store.js';
+import { openJournal, type CallRecord, type Journal } from '../src/store.js';
 import { SCHEMA_VERSION } from '../src/schema.js';
 
 const dirs: string[] = [];
@@ -221,5 +221,108 @@ describe('inspecting a journal', () => {
   it('says so when nothing matches', async () => {
     const { journal } = await journalIn();
     expect(journal.forget('nothing')).toEqual({ status: 'not-found' });
+  });
+});
+
+/**
+ * Spend is reported with the benchmark's rules (D-026, D-029): every call counts,
+ * failed ones included; cost is per heal; an unknown cost is never zero.
+ */
+describe('spend', () => {
+  const call = (overrides: Partial<CallRecord> = {}): CallRecord => ({
+    signature: 'sig-1',
+    ok: true,
+    failure: null,
+    durationMs: 1000,
+    costUsd: 0.02,
+    promptBytes: 500,
+    ...overrides,
+  });
+
+  const measure = (journal: Journal, verified: boolean, replayed: boolean) =>
+    journal.record({ signature: 'sig-1', kind: 'check-failed', patch: patch('x'), verified, attempts: 1, replayed });
+
+  it('starts empty', async () => {
+    const { journal } = await journalIn();
+    expect(journal.spend()).toMatchObject({ calls: 0, heals: 0, knownCostUsd: 0, costPerHealUsd: null });
+  });
+
+  it('charges every call — failed ones too — against the heals they bought', async () => {
+    const { journal } = await journalIn();
+    journal.recordCall(call({ costUsd: 0.03 }));
+    journal.recordCall(call({ ok: false, failure: 'run-failed', costUsd: 0.01 }));
+    journal.recordCall(call({ costUsd: 0.02 }));
+    await measure(journal, false, false); // first proposal measured wrong
+    await measure(journal, true, false); // second healed it
+
+    const spend = journal.spend();
+
+    expect(spend).toMatchObject({ calls: 3, failedCalls: 1, heals: 1, failedMeasurements: 1, promptBytes: 1500 });
+    expect(spend.knownCostUsd).toBeCloseTo(0.06);
+    // $0.06 bought one heal.
+    expect(spend.costPerHealUsd).toBeCloseTo(0.06);
+  });
+
+  it('estimates replay savings from the cost per heal, and counts replays apart from heals', async () => {
+    const { journal } = await journalIn();
+    journal.recordCall(call({ costUsd: 0.05 }));
+    await measure(journal, true, false);
+    await measure(journal, true, true);
+    await measure(journal, true, true);
+
+    const spend = journal.spend();
+
+    expect(spend).toMatchObject({ heals: 1, replays: 2 });
+    expect(spend.estimatedSavedUsd).toBeCloseTo(0.1);
+  });
+
+  it('never turns an unknown cost into zero', async () => {
+    const { journal } = await journalIn();
+    journal.recordCall(call({ costUsd: 0.05 }));
+    journal.recordCall(call({ costUsd: null }));
+    await measure(journal, true, false);
+
+    const spend = journal.spend();
+
+    expect(spend.unknownCostCalls).toBe(1);
+    expect(spend.knownCostUsd).toBeCloseTo(0.05);
+    expect(spend.costPerHealUsd).toBeNull();
+    expect(spend.estimatedSavedUsd).toBeNull();
+  });
+
+  it('counts only what happened since a given moment', async () => {
+    const { journal } = await journalIn();
+    journal.recordCall(call());
+    const later = new Date(Date.now() + 60_000).toISOString();
+
+    expect(journal.spend({ since: later })).toMatchObject({ calls: 0, since: later });
+    expect(journal.spend().calls).toBe(1);
+  });
+
+  it('upgrades a version-1 journal in place, keeping every remembered fix', async () => {
+    // A file exactly as the previous release left it: one table, version 1.
+    const dir = await mkdtemp(join(tmpdir(), 'self-heal-journal-'));
+    dirs.push(dir);
+    const path = join(dir, 'v1.sqlite');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(path);
+    db.exec(`
+      CREATE TABLE outcomes (signature TEXT PRIMARY KEY, kind TEXT NOT NULL, patch TEXT NOT NULL,
+        verified INTEGER NOT NULL, attempts INTEGER NOT NULL, first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL, replays INTEGER NOT NULL DEFAULT 0);
+      PRAGMA user_version = 1;
+    `);
+    db.prepare('INSERT INTO outcomes VALUES (?, ?, ?, 1, 1, ?, ?, 3)').run(
+      'sig-old', 'check-failed', JSON.stringify(patch('kept')), '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+    );
+    db.close();
+
+    const journal = await openJournal(path);
+    open.push(journal);
+
+    expect((await journal.lookup('sig-old'))?.patch.edits[0]?.contents).toBe('kept');
+    expect(journal.stats()).toEqual({ total: 1, verified: 1, replays: 3 });
+    journal.recordCall(call());
+    expect(journal.spend().calls).toBe(1);
   });
 });

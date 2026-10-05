@@ -25,10 +25,11 @@ import { ContractDetector } from '@self-heal/detector-contract';
 import { VisualDetector } from '@self-heal/detector-visual';
 import { HarnessFixer, createGitWorkspace } from '@self-heal/fixer-harness';
 import { NoopFixer } from '@self-heal/fixer-noop';
-import { openJournal, UnsupportedRuntimeError, type Journal } from '@self-heal/journal/store';
+import { openJournal, UnsupportedRuntimeError, type CallRecord, type Journal } from '@self-heal/journal/store';
 
 import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './config.js';
 import { writeEscalation } from './escalation.js';
+import { formatRunSpend, formatSpend, parseSince } from './stats.js';
 import { selectDetectors } from './select.js';
 
 const USAGE = `self-heal — detect, propose, verify, record
@@ -37,6 +38,7 @@ Usage:
   self-heal run     [--dry-run] [--only <id,...>] [--config <path>] [--allow-dirty]
   self-heal init    [--config <path>]
   self-heal journal [--limit <n>] [--forget <signature>] [--json]
+  self-heal stats   [--since <7d|24h|date>] [--json]
 
 Options:
   --dry-run      Detect, diagnose, and propose — then stop and print the patch.
@@ -54,6 +56,8 @@ Options:
   --limit        journal: how many remembered outcomes to show (default 20).
   --forget       journal: delete one outcome by signature, so the next
                  occurrence is proposed fresh instead of replayed.
+  --since        stats: only count what happened after this — a duration
+                 (7d, 24h) or a date. Default: all time.
   --fixer        "harness" (default) drives the agent CLI you already have
                  installed. "noop" proposes nothing — the loop still detects,
                  diagnoses, and reports, for free. --dry-run implies "noop".
@@ -73,6 +77,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       only: { type: 'string', multiple: true },
       limit: { type: 'string', default: '20' },
       forget: { type: 'string' },
+      since: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -98,6 +103,8 @@ export async function main(argv: readonly string[]): Promise<number> {
         return await runCommand_(values, cwd);
       case 'journal':
         return await journalCommand(values, cwd);
+      case 'stats':
+        return await statsCommand(values, cwd);
       default:
         process.stderr.write(`unknown command: ${positionals[0]}\n\n${USAGE}`);
         return 1;
@@ -163,10 +170,17 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
 
   // Signature → the hand-off written for it, so the report can point at it.
   const escalations = new Map<string, string>();
+  // Every model call this run, as the fixer measured it — for the run's own line,
+  // and into the journal so `self-heal stats` can add it up later (D-029).
+  const calls: CallRecord[] = [];
+  const onInvoke = (call: CallRecord) => {
+    calls.push(call);
+    journal?.recordCall(call);
+  };
 
   const runner = new Runner({
     detectors,
-    fixer: buildFixer(values, config, dryRun),
+    fixer: buildFixer(values, config, dryRun, onInvoke),
     repo: new GitRepo({ dir: config.repoRoot }),
     ctx,
     // Absent means `NullJournal` — the runner has no "journal disabled" branch,
@@ -195,9 +209,10 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   journal?.close();
 
   if (values['json'] === true) {
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ...report, calls }, null, 2)}\n`);
   } else {
     process.stdout.write(formatReport(report.outcomes, report.issues, dryRun, escalations));
+    process.stdout.write(formatRunSpend(calls));
     if (savings !== undefined && savings.replays > 0) {
       const line = `journal: ${savings.replays} model call(s) skipped, ${savings.verified} verified fix(es) remembered`;
       process.stdout.write(`${line}\n`);
@@ -292,6 +307,22 @@ function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts'
  * into the store was a summary line at the end of a run, which is enough to know
  * something was replayed and not enough to know what.
  */
+/** What the loop has spent, and what it bought (D-029). */
+async function statsCommand(values: Record<string, unknown>, cwd: string): Promise<number> {
+  const config = await loadConfig(values['config'] as string, cwd);
+  const since = typeof values['since'] === 'string' ? parseSince(values['since']) : undefined;
+  const journal = await openJournalOrExplain(config, createConsoleLogger({ level: 'warn' }));
+  if (journal === undefined) return 4;
+
+  try {
+    const report = journal.spend(since !== undefined ? { since } : {});
+    process.stdout.write(values['json'] === true ? `${JSON.stringify(report, null, 2)}\n` : formatSpend(report));
+    return 0;
+  } finally {
+    journal.close();
+  }
+}
+
 async function journalCommand(values: Record<string, unknown>, cwd: string): Promise<number> {
   const config = await loadConfig(values['config'] as string, cwd);
   const log = createConsoleLogger({ level: 'warn' });
@@ -362,7 +393,12 @@ async function journalCommand(values: Record<string, unknown>, cwd: string): Pro
  * default made `self-heal run` a command that detected problems and then did
  * nothing about them — the loop existed, but only the demo could close it.
  */
-function buildFixer(values: Record<string, unknown>, config: SelfHealConfig, dryRun: boolean): Fixer {
+function buildFixer(
+  values: Record<string, unknown>,
+  config: SelfHealConfig,
+  dryRun: boolean,
+  onInvoke: (call: CallRecord) => void,
+): Fixer {
   if (dryRun || values['fixer'] === 'noop') return new NoopFixer();
 
   const requested = values['fixer'];
@@ -376,6 +412,7 @@ function buildFixer(values: Record<string, unknown>, config: SelfHealConfig, dry
     // It is built per proposal and destroyed afterwards, so nothing a model does
     // outlives the attempt that did it.
     createWorkspace: () => createGitWorkspace({ repoRoot: config.repoRoot }),
+    onInvoke,
   });
 }
 

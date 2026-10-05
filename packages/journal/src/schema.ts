@@ -47,6 +47,30 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX IF NOT EXISTS outcomes_verified ON outcomes (verified);
   `,
+  // 2 — what the loop spent (D-029). Append-only, one row per event, because
+  // `outcomes` keeps one row per signature and so cannot count a second heal or
+  // say what the first one cost.
+  `
+  CREATE TABLE IF NOT EXISTS calls (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            TEXT NOT NULL,
+    signature     TEXT NOT NULL,
+    ok            INTEGER NOT NULL,
+    failure       TEXT,
+    cost_usd      REAL,             -- NULL: the harness did not say. Never 0 for unknown.
+    duration_ms   INTEGER NOT NULL,
+    prompt_bytes  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS calls_at ON calls (at);
+  CREATE TABLE IF NOT EXISTS measurements (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL,
+    signature  TEXT NOT NULL,
+    verified   INTEGER NOT NULL,   -- the detector's verdict, never the model's
+    replayed   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS measurements_at ON measurements (at);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
