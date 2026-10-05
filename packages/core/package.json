@@ -18,6 +18,7 @@
     "./contracts/diagnosis": "./dist/contracts/diagnosis.js",
     "./contracts/fixer": "./dist/contracts/fixer.js",
     "./contracts/issue": "./dist/contracts/issue.js",
+    "./contracts/escalation": "./dist/contracts/escalation.js",
     "./contracts/journal": "./dist/contracts/journal.js",
     "./contracts/patch": "./dist/contracts/patch.js",
     "./diagnosis/build": "./dist/diagnosis/build.js",

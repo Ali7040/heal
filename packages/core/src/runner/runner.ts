@@ -20,6 +20,8 @@
 import type { RunContext } from '../contracts/context.js';
 import type { Detector } from '../contracts/detector.js';
 import type { Diagnosis, PriorAttempt } from '../contracts/diagnosis.js';
+import type { AttemptRecord, EscalationReport } from '../contracts/escalation.js';
+import { ESCALATION_DIFF_LIMIT } from '../contracts/escalation.js';
 import { PRIOR_ATTEMPT_TEXT_LIMIT } from '../contracts/diagnosis.js';
 import type { Fixer } from '../contracts/fixer.js';
 import type { Issue } from '../contracts/issue.js';
@@ -57,6 +59,12 @@ export interface RunnerOptions {
   readonly collateralCheck?: boolean;
   /** Proceed even though the working tree has uncommitted changes (invariant 5). */
   readonly allowDirty?: boolean;
+  /**
+   * Called when an issue is handed to a human, with everything the loop learned
+   * about it (D-028). A failure here is logged, never fatal: the report is a
+   * courtesy, the escalation is the outcome.
+   */
+  readonly onEscalate?: (report: EscalationReport) => void | Promise<void>;
   /** Called on every state change — the loop's timeline, used by logs and the demo. */
   readonly onTransition?: (event: TransitionEvent) => void;
 }
@@ -108,6 +116,8 @@ export class Runner {
    * someone else's issue — but must not add to them.
    */
   readonly #failing = new Set<string>();
+  /** The diff of the attempt `#attempt` last restored away, for the escalation report. */
+  #lastDiff: string | undefined;
   #state: RunState = 'IDLE';
 
   constructor(options: RunnerOptions) {
@@ -212,6 +222,11 @@ export class Runner {
     // What already failed for this issue, fed to the next proposal so a retry is
     // a different guess rather than the same prompt paid for twice (D-018).
     const failures: PriorAttempt[] = [];
+    // The same story at full resolution, for the person who takes over (D-028).
+    const history: AttemptRecord[] = [];
+    let lastDiagnosis: Diagnosis | undefined;
+    const remember = (patch: Patch, reason: string, replayed: boolean) =>
+      history.push(attemptRecord(history.length + 1, patch, reason, replayed, this.#lastDiff));
 
     // Free path first: a previously verified patch for this exact signature is
     // replayed without involving a fixer at all (D-006). Costs nothing.
@@ -232,6 +247,7 @@ export class Runner {
       const replayed = await this.#attempt(issue, detector, remembered.patch, true);
       if (replayed.state === 'HEALED') return replayed;
       failures.push(priorAttempt(remembered.patch, `previously verified fix no longer works: ${replayed.reason}`));
+      remember(remembered.patch, replayed.reason, true);
       ctx.log.warn('replay failed, falling back to a fresh proposal', { signature: issue.signature });
     }
 
@@ -243,6 +259,7 @@ export class Runner {
       this.#to('DIAGNOSING', issue.signature);
       const built = await this.#options.diagnose(issue, ctx);
       const diagnosis: Diagnosis = failures.length > 0 ? { ...built, priorAttempts: [...failures] } : built;
+      lastDiagnosis = diagnosis;
       ctx.log.debug('diagnosis built', {
         signature: issue.signature,
         slices: diagnosis.slices.length,
@@ -268,7 +285,10 @@ export class Runner {
         );
         if (checkpoint === null) {
           this.#breaker.recordFailure();
-          return this.#escalate(issue, 'could not create a git checkpoint; refusing to mutate', lastPatch);
+          return this.#escalate(issue, 'could not create a git checkpoint; refusing to mutate', lastPatch, {
+            diagnosis,
+            attempts: history,
+          });
         }
       }
 
@@ -295,9 +315,13 @@ export class Runner {
       if (attempted.state === 'HEALED') return attempted;
       lastReason = attempted.reason;
       failures.push(priorAttempt(patch, attempted.reason));
+      remember(patch, attempted.reason, false);
     }
 
-    return this.#escalate(issue, `attempt cap reached (${this.#breaker.attemptCap}); last: ${lastReason}`, lastPatch);
+    return this.#escalate(issue, `attempt cap reached (${this.#breaker.attemptCap}); last: ${lastReason}`, lastPatch, {
+      ...(lastDiagnosis !== undefined ? { diagnosis: lastDiagnosis } : {}),
+      attempts: history,
+    });
   }
 
   /** Apply → verify → record. Shared by a fresh proposal and a journal replay. */
@@ -310,6 +334,7 @@ export class Runner {
   ): Promise<IssueOutcome> {
     const { ctx, repo } = this.#options;
     const attempts = this.#breaker.attemptsFor(issue.signature);
+    this.#lastDiff = undefined;
 
     const restorePoint = checkpoint ?? (await repo.currentCommit());
     if (restorePoint === null) {
@@ -345,6 +370,7 @@ export class Runner {
     const verified = await detector.verify(issue, ctx);
 
     if (!verified) {
+      this.#lastDiff = await attemptDiff(repo);
       await repo.restore(restorePoint);
       this.#breaker.recordFailure();
       const reason = 'verification failed; tree restored';
@@ -358,6 +384,7 @@ export class Runner {
     // Still part of verification: HEALED requires both (D-025).
     const broke = this.#options.collateralCheck === false ? [] : await this.#collateral(issue);
     if (broke.length > 0) {
+      this.#lastDiff = await attemptDiff(repo);
       await repo.restore(restorePoint);
       this.#breaker.recordFailure();
       const reason = `fixed its own check but broke ${broke.join(', ')}; tree restored`;
@@ -423,9 +450,33 @@ export class Runner {
     return [...new Set(broke)];
   }
 
-  #escalate(issue: Issue, reason: string, patch?: Patch): IssueOutcome {
+  async #escalate(
+    issue: Issue,
+    reason: string,
+    patch?: Patch,
+    context: { readonly diagnosis?: Diagnosis; readonly attempts?: readonly AttemptRecord[] } = {},
+  ): Promise<IssueOutcome> {
     this.#to('ESCALATED', issue.signature, { reason });
     this.#options.ctx.log.warn('escalated', { signature: issue.signature, reason });
+
+    if (this.#options.onEscalate !== undefined) {
+      const report: EscalationReport = {
+        issue,
+        reason,
+        ...(context.diagnosis !== undefined ? { diagnosis: context.diagnosis } : {}),
+        attempts: context.attempts ?? [],
+        escalatedAt: new Date().toISOString(),
+      };
+      try {
+        await this.#options.onEscalate(report);
+      } catch (error) {
+        this.#options.ctx.log.warn('could not write the escalation report', {
+          signature: issue.signature,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     return {
       issue,
       state: 'ESCALATED',
@@ -525,4 +576,34 @@ function describeCheck(issue: Issue): string {
   const { file, endpoint, selector } = issue.location;
   const where = endpoint ?? selector ?? file;
   return `${issue.detectorId} (${issue.kind}${where !== undefined ? ` at ${where}` : ''})`;
+}
+
+function attemptRecord(
+  number: number,
+  patch: Patch,
+  reason: string,
+  replayed: boolean,
+  diff: string | undefined,
+): AttemptRecord {
+  return {
+    number,
+    replayed,
+    files: patch.edits.map((edit) => edit.path),
+    rationale: patch.rationale,
+    reason,
+    ...(diff !== undefined && diff !== '' ? { diff } : {}),
+  };
+}
+
+/**
+ * The applied attempt as git sees it, taken just before the restore wipes it.
+ * New files are marked intent-to-add so `diff HEAD` shows them too; the restore's
+ * `reset --hard` clears that again.
+ */
+async function attemptDiff(repo: GitRepo): Promise<string> {
+  await repo.git('add', '--intent-to-add', '--all');
+  const diff = await repo.diff();
+  return diff.length > ESCALATION_DIFF_LIMIT
+    ? `${diff.slice(0, ESCALATION_DIFF_LIMIT)}\n… diff truncated at ${ESCALATION_DIFF_LIMIT} characters`
+    : diff;
 }

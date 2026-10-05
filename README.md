@@ -147,6 +147,13 @@ retry is told what it broke. A check that was already failing does not count
 against it. This costs one full detection per fix — `"collateral": false` in the
 config turns it off, and `--only` narrows it along with everything else.
 
+When the loop gives up on an issue (`ESCALATED`), it does not hand you a one-line
+reason. It writes `.self-heal/evidence/escalations/<signature>.md`: what was
+measured, the code the model was shown, every attempt as a diff with the measured
+reason it failed, and where to start — patterns in the failures, such as every
+attempt editing the same file or a proposal reaching for a protected test. The run
+report links to it.
+
 What a run leaves in your history is one commit per verified fix, authored by
 `self-heal` and named for what it fixed — so each can be reviewed or reverted on
 its own (`git log --author=self-heal`). A failed attempt leaves nothing: no empty

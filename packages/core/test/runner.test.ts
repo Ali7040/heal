@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { RunContext } from '../src/contracts/context.js';
 import type { Detector } from '../src/contracts/detector.js';
 import type { Diagnosis } from '../src/contracts/diagnosis.js';
+import type { EscalationReport } from '../src/contracts/escalation.js';
 import type { Fixer } from '../src/contracts/fixer.js';
 import type { Issue } from '../src/contracts/issue.js';
 import type { Patch } from '../src/contracts/patch.js';
@@ -685,6 +686,76 @@ describe('Runner', () => {
       const report = await runner.run();
 
       expect(report.outcomes[0]?.state).toBe('HEALED');
+    });
+  });
+
+  describe('escalation hand-off (D-028)', () => {
+    it('hands over every attempt, with the diff each one applied and why it failed', async () => {
+      sandbox = await brokenSandbox();
+      const box = sandbox;
+      const reports: EscalationReport[] = [];
+      let tries = 0;
+      const fixer: Fixer = {
+        id: 'wrong',
+        propose: async (diagnosis) => {
+          tries += 1;
+          return {
+            fixerId: 'wrong',
+            signature: diagnosis.issue.signature,
+            // The second attempt also creates a file — it must show up in the diff.
+            edits: [
+              { path: 'src/value.mjs', contents: `export const value = ${tries * 100};\n` },
+              ...(tries === 2 ? [{ path: 'src/helper.mjs', contents: 'export const h = 1;\n' }] : []),
+            ],
+            rationale: `guess ${tries}`,
+          };
+        },
+      };
+      const { runner } = await makeRunner(box, fixer, { onEscalate: (report) => void reports.push(report) });
+
+      await runner.run();
+
+      expect(reports).toHaveLength(1);
+      const [report] = reports;
+      expect(report?.reason).toMatch(/^attempt cap reached/);
+      expect(report?.diagnosis?.editableFiles).toEqual(['src/value.mjs']);
+      expect(report?.attempts.map((a) => [a.number, a.rationale, a.reason])).toEqual([
+        [1, 'guess 1', 'verification failed; tree restored'],
+        [2, 'guess 2', 'verification failed; tree restored'],
+      ]);
+      expect(report?.attempts[0]?.diff).toContain('+export const value = 100;');
+      expect(report?.attempts[1]?.diff).toContain('+export const h = 1;');
+      // Taking the diff must not leave anything behind: the restore still restores.
+      expect(await box.git.isClean()).toBe(true);
+      expect(await box.read('src/value.mjs')).toBe(BROKEN);
+    });
+
+    it('records a rejected attempt without a diff — it never touched the tree', async () => {
+      sandbox = await brokenSandbox();
+      const reports: EscalationReport[] = [];
+      const { runner } = await makeRunner(sandbox, fixerReturning([{ path: 'elsewhere.mjs', contents: 'x' }]), {
+        attemptCap: 1,
+        onEscalate: (report) => void reports.push(report),
+      });
+
+      await runner.run();
+
+      expect(reports[0]?.attempts[0]?.reason).toContain('elsewhere.mjs (not-allowed)');
+      expect(reports[0]?.attempts[0]?.diff).toBeUndefined();
+    });
+
+    it('still escalates when writing the report fails', async () => {
+      sandbox = await brokenSandbox();
+      const { runner } = await makeRunner(sandbox, fixerReturning([]), {
+        attemptCap: 1,
+        onEscalate: () => {
+          throw new Error('disk full');
+        },
+      });
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('ESCALATED');
     });
   });
 

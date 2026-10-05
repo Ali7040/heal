@@ -10,7 +10,7 @@
  */
 import { parseArgs } from 'node:util';
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 
 import type { Detector } from '@self-heal/core/contracts/detector';
 import type { Fixer } from '@self-heal/core/contracts/fixer';
@@ -28,6 +28,7 @@ import { NoopFixer } from '@self-heal/fixer-noop';
 import { openJournal, UnsupportedRuntimeError, type Journal } from '@self-heal/journal/store';
 
 import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './config.js';
+import { writeEscalation } from './escalation.js';
 import { selectDetectors } from './select.js';
 
 const USAGE = `self-heal — detect, propose, verify, record
@@ -160,6 +161,9 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     log,
   };
 
+  // Signature → the hand-off written for it, so the report can point at it.
+  const escalations = new Map<string, string>();
+
   const runner = new Runner({
     detectors,
     fixer: buildFixer(values, config, dryRun),
@@ -179,6 +183,10 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
         repoRoot: config.repoRoot,
         editableFiles: editableFor(issue, config),
       }),
+    onEscalate: async (escalation) => {
+      const path = await writeEscalation(escalation, ctx.evidenceDir);
+      escalations.set(escalation.issue.signature, relative(config.repoRoot, path).split('\\').join('/'));
+    },
     onTransition: (event) => log.debug(`${event.from} → ${event.to}`, event.detail ?? {}),
   });
 
@@ -189,7 +197,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   if (values['json'] === true) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
-    process.stdout.write(formatReport(report.outcomes, report.issues, dryRun));
+    process.stdout.write(formatReport(report.outcomes, report.issues, dryRun, escalations));
     if (savings !== undefined && savings.replays > 0) {
       const line = `journal: ${savings.replays} model call(s) skipped, ${savings.verified} verified fix(es) remembered`;
       process.stdout.write(`${line}\n`);
@@ -410,12 +418,19 @@ function editableFor(issue: Issue, config: SelfHealConfig): readonly string[] {
   return config.allowlist;
 }
 
-function formatReport(outcomes: readonly IssueOutcome[], issues: number, dryRun: boolean): string {
+function formatReport(
+  outcomes: readonly IssueOutcome[],
+  issues: number,
+  dryRun: boolean,
+  escalations: ReadonlyMap<string, string>,
+): string {
   if (issues === 0) return 'no issues detected\n';
 
   const lines = outcomes.map((outcome) => {
     const marker = { HEALED: '✔', RESOLVED: '✔', PROPOSED: '·', REVERTED: '✗', ESCALATED: '!' }[outcome.state];
-    return `${marker} ${outcome.state.padEnd(9)} ${outcome.issue.kind} [${outcome.issue.signature.slice(0, 8)}] ${outcome.reason}`;
+    const line = `${marker} ${outcome.state.padEnd(9)} ${outcome.issue.kind} [${outcome.issue.signature.slice(0, 8)}] ${outcome.reason}`;
+    const handoff = escalations.get(outcome.issue.signature);
+    return handoff === undefined ? line : `${line}\n    → what was tried, and why it failed: ${handoff}`;
   });
 
   const healed = outcomes.filter((o) => o.state === 'HEALED' || o.state === 'RESOLVED').length;
