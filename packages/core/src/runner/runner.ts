@@ -57,6 +57,12 @@ export interface RunnerOptions {
    * guarantee for one less full detection per heal.
    */
   readonly collateralCheck?: boolean;
+  /**
+   * How many times a failure must re-run and fail again before anything is spent
+   * on it — and before a newly failing check counts against a fix (D-030).
+   * Default 1; 0 trusts the first measurement.
+   */
+  readonly confirmFailures?: number;
   /** Proceed even though the working tree has uncommitted changes (invariant 5). */
   readonly allowDirty?: boolean;
   /**
@@ -84,7 +90,7 @@ export interface TransitionEvent {
 
 export interface IssueOutcome {
   readonly issue: Issue;
-  readonly state: 'HEALED' | 'RESOLVED' | 'REVERTED' | 'ESCALATED' | 'PROPOSED';
+  readonly state: 'HEALED' | 'RESOLVED' | 'FLAKY' | 'REVERTED' | 'ESCALATED' | 'PROPOSED';
   readonly attempts: number;
   /** Present when a patch was produced, applied or not. */
   readonly patch?: Patch;
@@ -108,6 +114,7 @@ export class Runner {
   readonly #journal: JournalPort;
   readonly #breaker: CircuitBreaker;
   readonly #protected: readonly string[];
+  readonly #confirmFailures: number;
   /** Set once a patch lands; from then on, later issues may already be gone. */
   #treeChanged = false;
   /**
@@ -128,6 +135,7 @@ export class Runner {
       ...(options.protectedPaths ?? []),
       ...options.detectors.flatMap((detector) => detector.protectedPaths?.() ?? []),
     ];
+    this.#confirmFailures = Math.max(0, Math.floor(options.confirmFailures ?? 1));
     this.#breaker = new CircuitBreaker({
       ...(options.attemptCap !== undefined ? { attemptCap: options.attemptCap } : {}),
       ...(options.failureThreshold !== undefined ? { failureThreshold: options.failureThreshold } : {}),
@@ -208,15 +216,22 @@ export class Runner {
 
     this.#to('TRIAGING', issue.signature);
 
-    // Issues were detected once, up front. A fix that has landed since can cure
-    // others too (a type error that was also failing the tests), so re-measure
-    // before paying for a proposal. Only after something landed: until then the
-    // detection is still current, and re-running it would cost time for nothing.
-    if (this.#treeChanged && (await detector.verify(issue, ctx))) {
+    // Re-measure before paying for anything. Two different questions, one check:
+    //   - after a fix has landed, is this one already gone? (D-022) Once is enough.
+    //   - before anything has landed, does the failure even reproduce? A check that
+    //     fails then passes is flaky, and a patch would be "verified" by luck (D-030).
+    const confirmations = this.#treeChanged ? 1 : this.#confirmFailures;
+    if (await this.#passesWithin(detector, issue, confirmations)) {
       this.#failing.delete(checkKey(issue));
-      const reason = 'already healthy: resolved by an earlier fix in this run';
-      this.#to('RESOLVED', issue.signature, { reason });
-      return { issue, state: 'RESOLVED', attempts: 0, reason, replayed: false };
+      if (this.#treeChanged) {
+        const reason = 'already healthy: resolved by an earlier fix in this run';
+        this.#to('RESOLVED', issue.signature, { reason });
+        return { issue, state: 'RESOLVED', attempts: 0, reason, replayed: false };
+      }
+      const reason = 'failed once, then passed unchanged: a flaky check, not sent to a model';
+      ctx.log.warn('flaky check', { signature: issue.signature, detector: detector.id });
+      this.#to('FLAKY', issue.signature, { reason });
+      return { issue, state: 'FLAKY', attempts: 0, reason, replayed: false };
     }
 
     // What already failed for this issue, fed to the next proposal so a retry is
@@ -417,6 +432,14 @@ export class Runner {
     };
   }
 
+  /** True if `verify` passes on any of up to `times` re-runs. Zero re-runs never passes. */
+  async #passesWithin(detector: Detector, issue: Issue, times: number): Promise<boolean> {
+    for (let run = 0; run < times; run += 1) {
+      if (await detector.verify(issue, this.#options.ctx)) return true;
+    }
+    return false;
+  }
+
   /**
    * Every detector, re-run on the patched tree. Returns the checks failing now
    * that were not failing before — empty means nothing new broke.
@@ -442,7 +465,14 @@ export class Runner {
       }
       for (const now of found) {
         const key = checkKey(now);
-        if (key !== own && !this.#failing.has(key)) broke.push(describeCheck(now));
+        if (key === own || this.#failing.has(key)) continue;
+        // Reverting a good fix over a flaky check is as wrong as keeping a bad one,
+        // so a newly failing check must fail again before it counts (D-030).
+        if (await this.#passesWithin(detector, now, this.#confirmFailures)) {
+          ctx.log.warn('flaky check ignored in collateral', { signature: issue.signature, check: describeCheck(now) });
+          continue;
+        }
+        broke.push(describeCheck(now));
       }
     }
 
@@ -504,7 +534,8 @@ export class Runner {
     // Re-entering the loop for a retry, or moving to the next issue, resets the
     // per-issue path; the graph describes one attempt, not the whole run.
     const restarting =
-      (from === 'REVERTED' || from === 'HEALED' || from === 'RESOLVED' || from === 'ESCALATED') && next === 'TRIAGING';
+      (from === 'REVERTED' || from === 'HEALED' || from === 'RESOLVED' || from === 'FLAKY' || from === 'ESCALATED') &&
+      next === 'TRIAGING';
 
     if (!restarting && !canTransition(from, next)) {
       throw new Error(`illegal transition ${from} → ${next}`);

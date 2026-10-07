@@ -149,6 +149,12 @@ nothing it does outlives the attempt. A checkpoint precedes every write, a dirty
 tree stops the run, and `HEALED` still means only one thing: the check that found
 the problem passes now.
 
+Nothing is spent on a failure that does not reproduce. Each one is re-run first;
+a check that fails and then passes with nothing changed is reported `FLAKY` and
+never sent to a model — a patch for it would be "verified" by luck. The same rule
+keeps a flaky check from reverting a good fix. `"confirmFailures": 2` re-runs
+more times for a check that flakes often; `0` trusts the first measurement.
+
 A fix must also break nothing else. Once it passes its own check, every detector
 runs again; if any check that was passing now fails, the fix is reverted and the
 retry is told what it broke. A check that was already failing does not count

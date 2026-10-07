@@ -527,20 +527,116 @@ describe('Runner', () => {
 
     expect(report.outcomes.map((o) => o.state)).toEqual(['HEALED', 'RESOLVED']);
     expect(proposals).toBe(1);
-    // One verify for the fix, one to find the second issue already gone. No more.
-    expect(detector.verifications).toBe(2);
+    // One to confirm the first failure reproduces (D-030), one for the fix, one to
+    // find the second issue already gone. No more.
+    expect(detector.verifications).toBe(3);
   });
 
-  it('does not re-measure before any fix has landed', async () => {
+  it('re-measures each failure once before spending on it, and not at all when told not to', async () => {
     sandbox = await brokenSandbox();
-    const detector = new TwinDetector(sandbox.dir);
-    const { runner } = await makeRunner(sandbox, fixerReturning([]), { detectors: [detector] });
+    const guarded = new TwinDetector(sandbox.dir);
+    const { runner } = await makeRunner(sandbox, fixerReturning([]), { detectors: [guarded] });
 
-    const report = await runner.run();
+    expect((await runner.run()).outcomes.map((o) => o.state)).toEqual(['ESCALATED', 'ESCALATED']);
+    // One confirmation per issue; nothing was applied, so nothing else re-measured.
+    expect(guarded.verifications).toBe(2);
 
-    expect(report.outcomes.map((o) => o.state)).toEqual(['ESCALATED', 'ESCALATED']);
-    // Nothing was ever applied, so the up-front detection stayed current.
-    expect(detector.verifications).toBe(0);
+    const trusting = new TwinDetector(sandbox.dir);
+    const { runner: unguarded } = await makeRunner(sandbox, fixerReturning([]), {
+      detectors: [trusting],
+      confirmFailures: 0,
+    });
+    await unguarded.run();
+    expect(trusting.verifications).toBe(0);
+  });
+
+  describe('flake guard (D-030)', () => {
+    /** Fails its first `failures` measurements, then passes — with nothing changed. */
+    class FlakyDetector extends FileDetector {
+      override readonly id = 'flaky';
+      measurements = 0;
+      constructor(
+        dir: string,
+        private readonly failures: number,
+      ) {
+        super(dir);
+      }
+      override async detect(): Promise<Issue[]> {
+        this.measurements += 1;
+        const [issue] = await super.detect();
+        return this.measurements <= this.failures && issue !== undefined ? [{ ...issue, detectorId: this.id }] : [];
+      }
+      override async verify(): Promise<boolean> {
+        this.measurements += 1;
+        return this.measurements > this.failures;
+      }
+    }
+
+    function refusingFixer(): Fixer & { calls: number } {
+      const fixer = {
+        id: 'never',
+        calls: 0,
+        propose: async (diagnosis: Diagnosis) => {
+          fixer.calls += 1;
+          return { fixerId: 'never', signature: diagnosis.issue.signature, edits: [], rationale: '' };
+        },
+      };
+      return fixer;
+    }
+
+    it('reports a failure that does not reproduce as FLAKY, and spends nothing on it', async () => {
+      sandbox = await brokenSandbox();
+      const fixer = refusingFixer();
+      const { runner } = await makeRunner(sandbox, fixer, { detectors: [new FlakyDetector(sandbox.dir, 1)] });
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('FLAKY');
+      expect(report.outcomes[0]?.reason).toContain('flaky');
+      expect(fixer.calls).toBe(0);
+      expect(await sandbox.git.isClean()).toBe(true);
+    });
+
+    it('re-runs as many times as configured before calling it real', async () => {
+      sandbox = await brokenSandbox();
+      // Fails the detection and the first re-run, passes the second.
+      const fixer = refusingFixer();
+      const twice = new FlakyDetector(sandbox.dir, 2);
+      const { runner: once } = await makeRunner(sandbox, fixer, { detectors: [twice], attemptCap: 1 });
+      expect((await once.run()).outcomes[0]?.state).toBe('ESCALATED');
+      expect(fixer.calls).toBe(1);
+
+      const again = new FlakyDetector(sandbox.dir, 2);
+      const { runner: patient } = await makeRunner(sandbox, refusingFixer(), { detectors: [again], confirmFailures: 2 });
+      expect((await patient.run()).outcomes[0]?.state).toBe('FLAKY');
+    });
+
+    it('does not revert a good fix because some other check flaked', async () => {
+      sandbox = await Sandbox.create({
+        files: { 'src/value.mjs': BROKEN, 'src/other.mjs': 'ok\n' },
+        prefix: 'runner-test-',
+      });
+      // Healthy at detection; flakes once during the collateral check; then passes.
+      let runs = 0;
+      const shaky: Detector = {
+        id: 'shaky',
+        detect: async () => {
+          runs += 1;
+          return runs === 2
+            ? [{ signature: 'sig-shaky', detectorId: 'shaky', kind: 'flake', location: {}, expected: 0, actual: 1, evidence: [], severity: 'low', detectedAt: '' }]
+            : [];
+        },
+        verify: async () => true,
+      };
+      const { runner } = await makeRunner(sandbox, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]), {
+        detectors: [new FileDetector(sandbox.dir), shaky],
+      });
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('HEALED');
+      expect(await sandbox.read('src/value.mjs')).toBe(FIXED);
+    });
   });
 
   describe('collateral check (D-025)', () => {

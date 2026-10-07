@@ -18,6 +18,12 @@ describe('state machine', () => {
     expect(isTerminal('RESOLVED')).toBe(true);
   });
 
+  it('reaches FLAKY only from TRIAGING — before any patch exists to take the credit', () => {
+    const sources = (Object.keys(TRANSITIONS) as RunState[]).filter((from) => TRANSITIONS[from].includes('FLAKY'));
+    expect(sources).toEqual(['TRIAGING']);
+    expect(isTerminal('FLAKY')).toBe(true);
+  });
+
   it('never mutates without passing through CHECKPOINTING (invariant 1)', () => {
     // The only edge into PROPOSING — the step that produces a patch — is from
     // CHECKPOINTING, so no proposal can exist without a checkpoint behind it.

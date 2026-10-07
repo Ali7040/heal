@@ -191,6 +191,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     attemptCap: config.attemptCap,
     failureThreshold: config.failureThreshold,
     collateralCheck: config.collateral,
+    confirmFailures: config.confirmFailures,
     allowDirty: values['allow-dirty'] === true,
     diagnose: (issue: Issue) =>
       buildDiagnosis(issue, {
@@ -464,7 +465,9 @@ function formatReport(
   if (issues === 0) return 'no issues detected\n';
 
   const lines = outcomes.map((outcome) => {
-    const marker = { HEALED: '✔', RESOLVED: '✔', PROPOSED: '·', REVERTED: '✗', ESCALATED: '!' }[outcome.state];
+    const marker = { HEALED: '✔', RESOLVED: '✔', FLAKY: '~', PROPOSED: '·', REVERTED: '✗', ESCALATED: '!' }[
+      outcome.state
+    ];
     const line = `${marker} ${outcome.state.padEnd(9)} ${outcome.issue.kind} [${outcome.issue.signature.slice(0, 8)}] ${outcome.reason}`;
     const handoff = escalations.get(outcome.issue.signature);
     return handoff === undefined ? line : `${line}\n    → what was tried, and why it failed: ${handoff}`;

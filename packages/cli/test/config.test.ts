@@ -33,6 +33,13 @@ describe('protected paths in config', () => {
     expect(config.protected).toEqual(['self-heal.config.json']);
   });
 
+  it('confirms a failure once by default, and refuses a nonsense count', async () => {
+    expect((await configWith({})).confirmFailures).toBe(1);
+    expect((await configWith({ confirmFailures: 0 })).confirmFailures).toBe(0);
+    await expect(configWith({ confirmFailures: -1 })).rejects.toBeInstanceOf(ConfigError);
+    await expect(configWith({ confirmFailures: 1.5 })).rejects.toBeInstanceOf(ConfigError);
+  });
+
   it('rejects a protected value that is not a list', async () => {
     await expect(configWith({ protected: '**/*.test.*' })).rejects.toBeInstanceOf(ConfigError);
   });

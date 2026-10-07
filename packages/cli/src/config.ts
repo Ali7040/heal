@@ -87,6 +87,8 @@ export interface SelfHealConfig {
   readonly failureThreshold: number;
   /** Re-run every detector after a fix and revert it if it broke another check. Default true (D-025). */
   readonly collateral: boolean;
+  /** Re-runs a failure must also fail before anything is spent on it. Default 1, 0 disables (D-030). */
+  readonly confirmFailures: number;
   readonly evidenceDir: string;
   /** Outcome journal, relative to the repo root. Gitignored by `self-heal init`. */
   readonly journalPath: string;
@@ -189,9 +191,18 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
     failureThreshold:
       typeof record['failureThreshold'] === 'number' ? record['failureThreshold'] : DEFAULTS.failureThreshold,
     collateral: record['collateral'] !== false,
+    confirmFailures: validateConfirmFailures(record['confirmFailures']),
     evidenceDir: typeof record['evidenceDir'] === 'string' ? record['evidenceDir'] : DEFAULTS.evidenceDir,
     journalPath: typeof record['journalPath'] === 'string' ? record['journalPath'] : DEFAULTS.journalPath,
   };
+}
+
+function validateConfirmFailures(input: unknown): number {
+  if (input === undefined) return 1;
+  if (typeof input !== 'number' || !Number.isInteger(input) || input < 0 || input > 10) {
+    throw new ConfigError('config.confirmFailures must be a whole number from 0 to 10 (0 trusts the first measurement).');
+  }
+  return input;
 }
 
 function validateCheck(input: unknown, index: number): CheckConfig {
