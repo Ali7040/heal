@@ -92,7 +92,35 @@ export interface SelfHealConfig {
   readonly evidenceDir: string;
   /** Outcome journal, relative to the repo root. Gitignored by `self-heal init`. */
   readonly journalPath: string;
+  /**
+   * Globs a model never sees and no patch may write, even when tracked. Always
+   * includes `DEFAULT_SANDBOX_EXCLUDE`; a config can add to it, not remove (D-031).
+   */
+  readonly sandboxExclude: readonly string[];
+  /** Run a harness profile no spike has verified honours the tool grant. Default false. */
+  readonly allowUnverifiedHarness: boolean;
 }
+
+/**
+ * Files that hold secrets far more often than code, kept away from a model even
+ * when someone committed them. Deliberately narrow — every entry here is a file a
+ * bug fix should never need to read — and deliberately not removable: a security
+ * default you can switch off by typo is not a default.
+ */
+export const DEFAULT_SANDBOX_EXCLUDE: readonly string[] = [
+  '**/.env',
+  '**/.env.*',
+  '**/*.pem',
+  '**/*.key',
+  '**/*.p12',
+  '**/*.pfx',
+  '**/id_rsa*',
+  '**/id_ed25519*',
+  '**/id_ecdsa*',
+  '**/.npmrc',
+  '**/.pypirc',
+  '**/.netrc',
+];
 
 /**
  * Tests are the measurement for most command checks. A patch that edits the test
@@ -194,7 +222,17 @@ function validate(input: unknown, cwd: string, source: string): SelfHealConfig {
     confirmFailures: validateConfirmFailures(record['confirmFailures']),
     evidenceDir: typeof record['evidenceDir'] === 'string' ? record['evidenceDir'] : DEFAULTS.evidenceDir,
     journalPath: typeof record['journalPath'] === 'string' ? record['journalPath'] : DEFAULTS.journalPath,
+    sandboxExclude: validateSandboxExclude(record['sandboxExclude']),
+    allowUnverifiedHarness: record['allowUnverifiedHarness'] === true,
   };
+}
+
+function validateSandboxExclude(input: unknown): string[] {
+  if (input === undefined) return [...DEFAULT_SANDBOX_EXCLUDE];
+  if (!Array.isArray(input)) {
+    throw new ConfigError('config.sandboxExclude must be an array of globs. It adds to the built-in secret patterns.');
+  }
+  return [...new Set([...DEFAULT_SANDBOX_EXCLUDE, ...input.map(String)])];
 }
 
 function validateConfirmFailures(input: unknown): number {

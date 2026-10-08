@@ -20,6 +20,7 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "probe:harness": "node scripts/harness-probe.mjs",
+    "probe:sandbox": "node scripts/sandbox-probe.mjs",
     "demo": "node scripts/demo.mjs",
     "demo:heal": "node scripts/demo.mjs --heal",
     "demo:journal": "node scripts/demo.mjs --heal --twice",

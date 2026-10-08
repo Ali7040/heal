@@ -43,6 +43,23 @@ describe('createGitWorkspace', () => {
     expect(await readFile(join(workspace.dir, 'src/pricing.mjs'), 'utf8')).toBe(FILES['src/pricing.mjs']);
   });
 
+  it('does not copy an excluded file even when it is tracked — a committed secret stays out (D-031)', async () => {
+    sandbox = await Sandbox.create({
+      files: { ...FILES, '.env.local': 'API_KEY=secret\n', 'deploy/server.key': 'PRIVATE\n' },
+      prefix: 'self-heal-ws-src-',
+    });
+    // Really tracked — otherwise this would pass because git ignored them, not us.
+    expect(await new GitRepo({ dir: sandbox.dir }).trackedFiles()).toEqual(
+      expect.arrayContaining(['.env.local', 'deploy/server.key']),
+    );
+    const workspace = await createGitWorkspace({ repoRoot: sandbox.dir, exclude: ['**/.env.*', '**/*.key'] });
+    workspaces.push(workspace);
+
+    expect(await readFile(join(workspace.dir, 'src/pricing.mjs'), 'utf8')).toBe(FILES['src/pricing.mjs']);
+    await expect(stat(join(workspace.dir, '.env.local'))).rejects.toThrow();
+    await expect(stat(join(workspace.dir, 'deploy/server.key'))).rejects.toThrow();
+  });
+
   it('does not copy what the project has told git to ignore', async () => {
     sandbox = await Sandbox.create({ files: FILES, prefix: 'self-heal-ws-src-' });
     await mkdir(join(sandbox.dir, 'secrets'), { recursive: true });

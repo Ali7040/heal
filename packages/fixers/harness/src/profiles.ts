@@ -30,6 +30,13 @@ export interface HarnessProfile {
   /** Executable name, resolved on PATH. */
   readonly command: string;
   /**
+   * True only when a spike has confirmed the profile honours the tool grant —
+   * no shell, no network — and terminates on its own. An unverified profile may
+   * run with whatever the harness defaults to, so it is refused unless a caller
+   * opts in explicitly (D-031).
+   */
+  readonly verified: boolean;
+  /**
    * How the prompt reaches the process.
    *
    * `stdin` is strongly preferred and is not a stylistic choice: on Windows an
@@ -61,6 +68,9 @@ export interface HarnessRunSummary {
 const claudeCode: HarnessProfile = {
   id: 'claude-code',
   command: 'claude',
+  // Phase 0's spike (D-008, D-009): stdin delivery, the tool grant, and patch
+  // capture were all confirmed against a real run.
+  verified: true,
   promptDelivery: 'stdin',
   buildArgs(request) {
     return [
@@ -107,6 +117,8 @@ const claudeCode: HarnessProfile = {
 const codexCli: HarnessProfile = {
   id: 'codex',
   command: 'codex',
+  // Ignores the tool grant entirely (see buildArgs). Refused unless opted in.
+  verified: false,
   promptDelivery: 'stdin',
   buildArgs(_request) {
     return ['exec', '--json'];

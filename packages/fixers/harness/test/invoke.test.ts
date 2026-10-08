@@ -13,6 +13,7 @@ function fakeProfile(script: string, overrides: Partial<HarnessProfile> = {}): H
   return {
     id: 'fake',
     command: process.execPath,
+    verified: true,
     promptDelivery: 'stdin',
     buildArgs: () => ['-e', script],
     parseResult: (stdout) => {

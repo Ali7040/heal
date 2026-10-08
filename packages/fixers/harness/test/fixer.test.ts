@@ -8,9 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Diagnosis } from '@self-heal/core/contracts/diagnosis';
 import { Sandbox } from '@self-heal/testkit/sandbox';
 
-import { HarnessFixer, buildPrompt, type InvocationRecord } from '../src/index.js';
+import { HarnessFixer, UnverifiedHarnessError, buildPrompt, type InvocationRecord } from '../src/index.js';
 import { createGitWorkspace } from '../src/workspace.js';
-import type { HarnessProfile } from '../src/profiles.js';
+import { getProfile, type HarnessProfile } from '../src/profiles.js';
 
 let sandbox: Sandbox | undefined;
 
@@ -23,6 +23,7 @@ afterEach(async () => {
 const editingHarness: HarnessProfile = {
   id: 'fake',
   command: process.execPath,
+  verified: true,
   promptDelivery: 'stdin',
   buildArgs: () => [
     '-e',
@@ -84,5 +85,24 @@ describe('HarnessFixer', () => {
 
     expect(patch.edits).toEqual([]);
     expect(records[0]).toMatchObject({ ok: false, failure: 'unparseable', costUsd: null });
+  });
+
+  describe('unverified harness profiles (D-031)', () => {
+    it('ships claude-code verified, and codex — which ignores the tool grant — not', () => {
+      expect(getProfile('claude-code').verified).toBe(true);
+      expect(getProfile('codex').verified).toBe(false);
+    });
+
+    it('refuses an unverified profile unless explicitly allowed', () => {
+      const create = (allowUnverified?: boolean) =>
+        new HarnessFixer({
+          harness: { ...editingHarness, verified: false },
+          createWorkspace: async () => ({ dir: '.', dispose: async () => {} }),
+          ...(allowUnverified !== undefined ? { allowUnverified } : {}),
+        });
+
+      expect(() => create()).toThrow(UnverifiedHarnessError);
+      expect(() => create(true)).not.toThrow();
+    });
   });
 });

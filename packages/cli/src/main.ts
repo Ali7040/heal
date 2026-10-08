@@ -23,7 +23,7 @@ import { Runner, type IssueOutcome } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
 import { ContractDetector } from '@self-heal/detector-contract';
 import { VisualDetector } from '@self-heal/detector-visual';
-import { HarnessFixer, createGitWorkspace } from '@self-heal/fixer-harness';
+import { HarnessFixer, UnverifiedHarnessError, createGitWorkspace } from '@self-heal/fixer-harness';
 import { NoopFixer } from '@self-heal/fixer-noop';
 import { openJournal, UnsupportedRuntimeError, type CallRecord, type Journal } from '@self-heal/journal/store';
 
@@ -187,7 +187,9 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     // it just gets a journal that remembers nothing (phase 1's seam, now filled).
     ...(journal !== undefined ? { journal } : {}),
     allowlist: config.allowlist,
-    protectedPaths: config.protected,
+    // What a model may not see, it may not write either: a patch "creating" `.env`
+    // would overwrite the real one (D-031).
+    protectedPaths: [...config.protected, ...config.sandboxExclude],
     attemptCap: config.attemptCap,
     failureThreshold: config.failureThreshold,
     collateralCheck: config.collateral,
@@ -197,6 +199,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
       buildDiagnosis(issue, {
         repoRoot: config.repoRoot,
         editableFiles: editableFor(issue, config),
+        exclude: config.sandboxExclude,
       }),
     onEscalate: async (escalation) => {
       const path = await writeEscalation(escalation, ctx.evidenceDir);
@@ -407,14 +410,21 @@ function buildFixer(
     throw new ConfigError(`unknown --fixer "${String(requested)}". Use "harness" or "noop".`);
   }
 
-  return new HarnessFixer({
-    harness: config.harness,
-    // The harness edits a copy in the OS temp directory, never the user's tree.
-    // It is built per proposal and destroyed afterwards, so nothing a model does
-    // outlives the attempt that did it.
-    createWorkspace: () => createGitWorkspace({ repoRoot: config.repoRoot }),
-    onInvoke,
-  });
+  try {
+    return new HarnessFixer({
+      harness: config.harness,
+      // The harness edits a copy in the OS temp directory, never the user's tree.
+      // It is built per proposal and destroyed afterwards, so nothing a model does
+      // outlives the attempt that did it. Secrets are never copied in (D-031).
+      createWorkspace: () => createGitWorkspace({ repoRoot: config.repoRoot, exclude: config.sandboxExclude }),
+      onInvoke,
+      allowUnverified: config.allowUnverifiedHarness,
+    });
+  } catch (error) {
+    // Refused before any detector runs, as a config problem with a readable fix.
+    if (error instanceof UnverifiedHarnessError) throw new ConfigError(error.message);
+    throw error;
+  }
 }
 
 function buildVisualDetector(visual: NonNullable<SelfHealConfig['visual']>): VisualDetector {

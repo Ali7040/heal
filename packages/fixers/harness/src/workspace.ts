@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 
 import { GitRepo } from '@self-heal/core/git/repo';
+import { matches } from '@self-heal/core/safety/allowlist';
 
 import type { HarnessWorkspace } from './index.js';
 
@@ -30,6 +31,12 @@ export interface GitWorkspaceOptions {
   readonly prefix?: string;
   /** Skip files larger than this. A model has no use for a 5 MB blob. */
   readonly maxFileBytes?: number;
+  /**
+   * Globs never copied in, even when tracked — the secrets a team committed by
+   * mistake (`.env`, private keys). What is not in the sandbox, the model cannot
+   * read, quote, or send anywhere (D-031).
+   */
+  readonly exclude?: readonly string[];
 }
 
 export const DEFAULT_MAX_FILE_BYTES = 512 * 1024;
@@ -45,7 +52,10 @@ export async function createGitWorkspace(options: GitWorkspaceOptions): Promise<
     );
   }
 
-  const paths = listed.stdout.split('\0').filter((path) => path !== '');
+  const exclude = options.exclude ?? [];
+  const paths = listed.stdout
+    .split('\0')
+    .filter((path) => path !== '' && !exclude.some((glob) => matches(path, glob)));
   if (paths.length === 0) {
     throw new WorkspaceError(`${options.repoRoot} has no tracked files — nothing for a fixer to work from`);
   }

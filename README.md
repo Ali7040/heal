@@ -223,6 +223,35 @@ replace that list; `.self-heal/` and the config file stay protected regardless.
 
 ---
 
+## Security
+
+The model is treated as an untrusted contractor working on a copy of your code.
+Most of the protection is architecture, not instructions:
+
+- **It works on a copy.** Each proposal runs in a disposable sandbox in the OS temp
+  directory, built from tracked files. It never sees your working tree.
+- **No shell, no network.** `Bash`, `WebFetch` and `WebSearch` are denied. A harness
+  profile not yet verified to honour that is refused unless you set
+  `"allowUnverifiedHarness": true`.
+- **Secrets stay out.** Files matching `sandboxExclude` are never copied into the
+  sandbox, never shown in a prompt, and never writable by a patch — even if they are
+  tracked. The defaults (`.env*`, `*.pem`, `*.key`, SSH keys, `.npmrc`, `.pypirc`,
+  `.netrc`) cannot be removed, only added to.
+- **Its output is data.** Program output that reaches the prompt is fenced, labelled
+  untrusted, and capped. That lowers the odds of an injected instruction being
+  followed; the containment above is what limits the damage if one is.
+- **Its patch is measured, not trusted.** Allowlist, protected paths, and a stale-base
+  check run before anything is written; the check that found the problem and every
+  other check run after; a failure must reproduce before anything is spent.
+
+Two things this cannot do for you. A fix that passes every check you have can still
+be wrong, so **review the `self-heal` commits** — each is one fix, revertible on its
+own. And whether the harness's file tools are confined to the sandbox depends on the
+harness: `pnpm probe:sandbox` checks it with a canary file outside the sandbox (two
+model calls). Run it before using self-heal on a machine with secrets worth stealing.
+
+---
+
 ## API contracts
 
 A recorded contract is the shape of a response with every value discarded — which

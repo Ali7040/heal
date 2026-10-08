@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { matches } from '@self-heal/core/safety/allowlist';
 
-import { ConfigError, DEFAULT_PROTECTED, loadConfig } from '../src/config.js';
+import { ConfigError, DEFAULT_PROTECTED, DEFAULT_SANDBOX_EXCLUDE, loadConfig } from '../src/config.js';
 
 let dir: string | undefined;
 
@@ -51,5 +51,29 @@ describe('protected paths in config', () => {
     }
     expect(covered('src/testing.ts')).toBe(false);
     expect(covered('src/latest.ts')).toBe(false);
+  });
+
+  it('keeps secrets out by default, and lets a config add to the list but never remove from it', async () => {
+    expect((await configWith({})).sandboxExclude).toEqual([...DEFAULT_SANDBOX_EXCLUDE]);
+    const added = await configWith({ sandboxExclude: ['secrets/**'] });
+    expect(added.sandboxExclude).toEqual([...DEFAULT_SANDBOX_EXCLUDE, 'secrets/**']);
+    // An empty list is not an opt-out.
+    expect((await configWith({ sandboxExclude: [] })).sandboxExclude).toEqual([...DEFAULT_SANDBOX_EXCLUDE]);
+    await expect(configWith({ sandboxExclude: '.env' })).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it('covers the usual secret files, and not ordinary source', () => {
+    const excluded = (path: string) => DEFAULT_SANDBOX_EXCLUDE.some((glob) => matches(path, glob));
+    for (const path of ['.env', 'app/.env.production', 'certs/server.pem', 'tls.key', 'deploy/id_rsa', '.npmrc']) {
+      expect(excluded(path), path).toBe(true);
+    }
+    for (const path of ['src/env.ts', 'src/keys.ts', 'src/monkey.js', 'docs/environment.md']) {
+      expect(excluded(path), path).toBe(false);
+    }
+  });
+
+  it('runs only verified harnesses unless told otherwise', async () => {
+    expect((await configWith({})).allowUnverifiedHarness).toBe(false);
+    expect((await configWith({ allowUnverifiedHarness: true })).allowUnverifiedHarness).toBe(true);
   });
 });

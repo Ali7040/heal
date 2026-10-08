@@ -47,6 +47,12 @@ export interface BuildDiagnosisOptions {
   readonly budgetBytes?: number;
   /** Extra files worth showing, beyond the issue's own location. */
   readonly extraFiles?: readonly string[];
+  /**
+   * Globs never shown to a model, whatever points at them — the same list the
+   * fixer's sandbox leaves out, so a secret cannot reach a prompt by being where
+   * a stack trace happened to point (D-031).
+   */
+  readonly exclude?: readonly string[];
 }
 
 /** A file at or under this size is sent whole when no line is known. */
@@ -75,7 +81,9 @@ export async function buildDiagnosis(issue: Issue, options: BuildDiagnosisOption
   const sources = new Map<string, string | null>();
   let spent = 0;
 
+  const exclude = options.exclude ?? [];
   const add = async (path: string, line: number | undefined): Promise<void> => {
+    if (exclude.some((glob) => matches(path, glob))) return;
     if (covered(slices, path, line)) return;
 
     if (!sources.has(path)) sources.set(path, await readFileOrNull(join(options.repoRoot, path)));
@@ -102,7 +110,10 @@ export async function buildDiagnosis(issue: Issue, options: BuildDiagnosisOption
   // to search blind (D-027), so fall back to what the check says it is *about*: its
   // editable files, as tracked by git, each whole if small or outlined if not.
   if (slices.length === 0) {
-    for (const path of await editableTracked(options.repoRoot, options.editableFiles)) await add(path, undefined);
+    const candidates = (await editableTracked(options.repoRoot, options.editableFiles)).filter(
+      (path) => !exclude.some((glob) => matches(path, glob)),
+    );
+    for (const path of candidates.slice(0, EDITABLE_FALLBACK_MAX_FILES)) await add(path, undefined);
   }
 
   return { issue, slices, editableFiles: options.editableFiles };
@@ -118,9 +129,7 @@ export const EDITABLE_FALLBACK_MAX_FILES = 8;
 async function editableTracked(repoRoot: string, editable: readonly string[]): Promise<string[]> {
   if (editable.length === 0) return [];
   const tracked = (await new GitRepo({ dir: repoRoot }).trackedFiles()) ?? [];
-  return tracked
-    .filter((path) => editable.some((glob) => matches(path, glob)))
-    .slice(0, EDITABLE_FALLBACK_MAX_FILES);
+  return tracked.filter((path) => editable.some((glob) => matches(path, glob)));
 }
 
 /** The enclosing declaration if one fits, else a line window. `line` is 1-based. */

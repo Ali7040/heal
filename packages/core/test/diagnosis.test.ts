@@ -232,4 +232,28 @@ describe('buildDiagnosis', () => {
       expect(diagnosis.slices.map((s) => s.path)).toEqual(['a.ts']);
     });
   });
+
+  describe('excluded files (D-031)', () => {
+    it('never shows an excluded file, even when the output pointed straight at it', async () => {
+      sandbox = await Sandbox.create({ files: { 'a.ts': TS, 'config/.env.local': 'API_KEY=secret\n' }, prefix: 'diag-test-' });
+      const issue: Issue = { ...issueAt('a.ts', 5), related: [{ file: 'config/.env.local', line: 1 }] };
+
+      const diagnosis = await buildDiagnosis(issue, { repoRoot: sandbox.dir, editableFiles: ['**'], exclude: ['**/.env.*'] });
+
+      expect(diagnosis.slices.map((s) => s.path)).toEqual(['a.ts']);
+      expect(JSON.stringify(diagnosis.slices)).not.toContain('secret');
+    });
+
+    it('leaves excluded files out of the editable fallback too', async () => {
+      sandbox = await Sandbox.create({ files: { 'src/a.mjs': 'a\n', 'src/.env.local': 'API_KEY=secret\n' }, prefix: 'diag-test-' });
+
+      const diagnosis = await buildDiagnosis(issueAt('src/**'), {
+        repoRoot: sandbox.dir,
+        editableFiles: ['src/**'],
+        exclude: ['**/.env.*'],
+      });
+
+      expect(diagnosis.slices.map((s) => s.path)).toEqual(['src/a.mjs']);
+    });
+  });
 });
