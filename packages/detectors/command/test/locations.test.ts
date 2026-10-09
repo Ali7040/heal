@@ -3,6 +3,9 @@
  * Each must turn into a repo-relative `file:line` — and anything that is not a
  * file in the repository must not.
  */
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Sandbox } from '@self-heal/testkit/sandbox';
@@ -79,7 +82,15 @@ describe('findLocations', () => {
     const box = await repo();
     const windows = box.dir.replace(/\//g, '\\');
     expect(await find(`    at total (${windows}\\src\\cart.ts:1:14)`)).toEqual(['src/cart.ts:1']);
-    expect(await find(`    at total (file://${box.dir.replace(/\\/g, '/')}/src/cart.ts:1:14)`)).toEqual(['src/cart.ts:1']);
+  });
+
+  it("reads node's file:// stack frames, in this platform's real URL form", async () => {
+    const box = await repo();
+    // pathToFileURL, not a hand-built string: `file:///tmp/…` on Linux and
+    // `file:///C:/…` on Windows. A hand-built URL hid a POSIX bug — see D-024.
+    const url = pathToFileURL(join(box.dir, 'src', 'cart.ts')).href;
+    expect(await find(`    at total (${url}:1:14)`)).toEqual(['src/cart.ts:1']);
+    expect(await find(`    at async run (${url}:7:3)\n    at node:internal/process/task_queues:105:5`)).toEqual(['src/cart.ts:7']);
   });
 
   it('drops what is not a file in this repository', async () => {

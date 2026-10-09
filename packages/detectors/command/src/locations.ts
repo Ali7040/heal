@@ -14,6 +14,7 @@
  */
 import { stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { IssueLocation } from '@self-heal/core/contracts/issue';
 import { matches } from '@self-heal/core/safety/allowlist';
@@ -115,7 +116,16 @@ function candidatesIn(output: string): Candidate[] {
  */
 function stripRoot(output: string, repoRoot: string): string {
   const variants = new Set([repoRoot, repoRoot.replace(/\\/g, '/'), repoRoot.replace(/\//g, '\\')]);
-  let text = output.replace(/file:\/\/\/?/g, '');
+  // A file URL decodes to a path by platform rules: `file:///tmp/a` is `/tmp/a` on
+  // POSIX, `file:///C:/a` is `C:\a` on Windows, and `%20` is a space. Stripping the
+  // scheme by hand got POSIX wrong — it ate the path's own leading slash.
+  let text = output.replace(/file:\/\/[^\s)'"`]+/g, (url) => {
+    try {
+      return fileURLToPath(url);
+    } catch {
+      return url;
+    }
+  });
   for (const root of variants) {
     const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     text = text.replace(new RegExp(`${escaped}[\\\\/]`, 'gi'), '');
