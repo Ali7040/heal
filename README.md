@@ -223,6 +223,58 @@ replace that list; `.self-heal/` and the config file stay protected regardless.
 
 ---
 
+## In CI
+
+When a build on your branch fails, the action runs the loop on a fresh
+`self-heal/<run>` branch and — only if a fix was verified by the check that found
+the problem and by every other check — opens a pull request with the run report as
+its body: what was fixed, by which commit, what it cost, and what it could not fix
+and why. **It never pushes to your branch.** The fix is a PR, so a person reviews it.
+
+```yaml
+# .github/workflows/self-heal.yml
+name: self-heal
+on:
+  workflow_run:
+    workflows: [ci]          # the name of your existing CI workflow
+    types: [completed]
+
+permissions:
+  contents: write            # push the self-heal/… branch
+  pull-requests: write       # open the PR
+
+jobs:
+  heal:
+    # A failed build of a *push* to this repository — never a pull request, whose
+    # code may come from a fork and must not run with this repository's secrets.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci           # whatever your checks need
+      - uses: Ali7040/heal@v0
+        with:
+          base: ${{ github.event.workflow_run.head_branch }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+- The harness runs with your own API key, from your repository's secrets. There is
+  no hosted service in between.
+- The action refuses to run on code from a fork (`pull_request_target`, or a
+  `workflow_run` whose head repository is not yours) even if a workflow asks it to.
+- A PR opened with the default `GITHUB_TOKEN` does not trigger your other workflows.
+  Pass a PAT or app token as `github-token` if the fix PR should run CI itself.
+- Outputs: `fixes`, `pr-url`, `branch`, `exit-code`. The run report is also written to
+  the job summary. Locally, `self-heal run --report-md report.md` produces the same.
+
 ## Security
 
 The model is treated as an untrusted contractor working on a copy of your code.

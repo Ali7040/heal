@@ -1,0 +1,73 @@
+# The self-heal GitHub Action (D-032).
+#
+# On a failing build: run the loop on a fresh self-heal/… branch, and if any fix
+# was verified — by the check that found the problem, and by every other check —
+# push that branch and open a pull request with the run report as its body.
+# It never pushes to your branch. See README "In CI" for a complete workflow,
+# including why it must not run on code from forks.
+name: self-heal
+description: Detect a regression, propose a fix with your agent harness, verify it, and open a pull request for review.
+author: Ali Haider
+branding:
+  icon: tool
+  color: green
+
+inputs:
+  base:
+    description: Branch the fix PR targets. Usually the branch whose build failed.
+    required: true
+  config:
+    description: Path to the self-heal config.
+    default: self-heal.config.json
+  version:
+    description: self-heal version to run from npm.
+    default: latest
+  install-harness:
+    description: Install the Claude Code CLI (the harness). Set false if your runner already has it.
+    default: 'true'
+  open-pr:
+    description: Push the fix branch and open a pull request. "false" stops after committing on the runner.
+    default: 'true'
+  args:
+    description: Extra arguments for `self-heal run`, e.g. "--only tests".
+    default: ''
+  github-token:
+    description: >
+      Token used to push the branch and open the PR. The default GITHUB_TOKEN works,
+      but a PR it opens does not trigger your other workflows — pass a PAT or app token
+      if the PR should run CI.
+    default: ${{ github.token }}
+
+outputs:
+  fixes:
+    description: Number of verified fix commits made.
+    value: ${{ steps.heal.outputs.fixes }}
+  pr-url:
+    description: URL of the opened pull request, if any.
+    value: ${{ steps.heal.outputs.pr-url }}
+  branch:
+    description: The self-heal branch the fixes were committed to.
+    value: ${{ steps.heal.outputs.branch }}
+  exit-code:
+    description: The exit code of `self-heal run` (0 when every issue was fixed).
+    value: ${{ steps.heal.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: install the harness
+      if: inputs.install-harness == 'true'
+      shell: bash
+      run: npm install --global @anthropic-ai/claude-code
+
+    - name: heal
+      id: heal
+      shell: bash
+      env:
+        SELF_HEAL_BASE: ${{ inputs.base }}
+        SELF_HEAL_CONFIG: ${{ inputs.config }}
+        SELF_HEAL_OPEN_PR: ${{ inputs.open-pr }}
+        SELF_HEAL_ARGS: ${{ inputs.args }}
+        SELF_HEAL_CMD: npx --yes self-heal@${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "$GITHUB_ACTION_PATH/action/heal.sh"

@@ -202,6 +202,16 @@ ${narrowed}`);
 
   // The noop fixer never calls a model, so there is honestly nothing to report —
   // and the command must say so rather than print a row of zero dollars.
+  // The CI action's PR body (D-032) comes from this flag, on the installed binary.
+  step('--report-md writes the run as Markdown');
+  const markdownPath = join(scratch, 'report.md');
+  cli(['run', '--fixer', 'noop', '--report-md', markdownPath], target, 1);
+  const markdown = await readFile(markdownPath, 'utf8').catch(() => '');
+  for (const expected of ['## self-heal: 0 of 1 issue(s) fixed', 'ESCALATED', '<details>']) {
+    if (!markdown.includes(expected)) fail(`--report-md output is missing ${expected}:\n${markdown}`);
+  }
+  ok('--report-md');
+
   step('the stats command works on a fresh install');
   const stats = cli(['stats'], target);
   if (!stats.includes('nothing measured yet')) fail(`stats on an unspent repo should say so:\n${stats}`);

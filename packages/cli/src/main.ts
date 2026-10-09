@@ -28,7 +28,8 @@ import { NoopFixer } from '@self-heal/fixer-noop';
 import { openJournal, UnsupportedRuntimeError, type CallRecord, type Journal } from '@self-heal/journal/store';
 
 import { loadConfig, ConfigError, EXAMPLE_CONFIG, type SelfHealConfig } from './config.js';
-import { writeEscalation } from './escalation.js';
+import { renderEscalation, writeEscalation } from './escalation.js';
+import { renderRunMarkdown } from './report-md.js';
 import { formatRunSpend, formatSpend, parseSince } from './stats.js';
 import { selectDetectors } from './select.js';
 
@@ -36,6 +37,7 @@ const USAGE = `self-heal — detect, propose, verify, record
 
 Usage:
   self-heal run     [--dry-run] [--only <id,...>] [--config <path>] [--allow-dirty]
+                    [--report-md <path>]
   self-heal init    [--config <path>]
   self-heal journal [--limit <n>] [--forget <signature>] [--json]
   self-heal stats   [--since <7d|24h|date>] [--json]
@@ -51,6 +53,8 @@ Options:
   --config       Path to config (default: ./self-heal.config.json)
   --verbose      Include debug-level log lines.
   --json         Emit the run report as JSON on stdout.
+  --report-md    run: also write the run as Markdown — outcomes, fix commits,
+                 spend, escalations — for a PR body or a CI job summary.
   --no-journal   Do not consult or update the outcome journal. Every occurrence
                  of a known regression then pays for a fresh model call.
   --limit        journal: how many remembered outcomes to show (default 20).
@@ -78,6 +82,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       limit: { type: 'string', default: '20' },
       forget: { type: 'string' },
       since: { type: 'string' },
+      'report-md': { type: 'string' },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -170,6 +175,11 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
 
   // Signature → the hand-off written for it, so the report can point at it.
   const escalations = new Map<string, string>();
+  // …and its text, for a Markdown report that folds it in (D-032).
+  const handoffs = new Map<string, { path: string; markdown: string }>();
+  const repo = new GitRepo({ dir: config.repoRoot });
+  // Where the run started, so the fix commits it made can be listed afterwards.
+  const startedAt = await repo.currentCommit();
   // Every model call this run, as the fixer measured it — for the run's own line,
   // and into the journal so `self-heal stats` can add it up later (D-029).
   const calls: CallRecord[] = [];
@@ -181,7 +191,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   const runner = new Runner({
     detectors,
     fixer: buildFixer(values, config, dryRun, onInvoke),
-    repo: new GitRepo({ dir: config.repoRoot }),
+    repo,
     ctx,
     // Absent means `NullJournal` — the runner has no "journal disabled" branch,
     // it just gets a journal that remembers nothing (phase 1's seam, now filled).
@@ -203,7 +213,9 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
       }),
     onEscalate: async (escalation) => {
       const path = await writeEscalation(escalation, ctx.evidenceDir);
-      escalations.set(escalation.issue.signature, relative(config.repoRoot, path).split('\\').join('/'));
+      const shown = relative(config.repoRoot, path).split('\\').join('/');
+      escalations.set(escalation.issue.signature, shown);
+      handoffs.set(escalation.issue.signature, { path: shown, markdown: renderEscalation(escalation) });
     },
     onTransition: (event) => log.debug(`${event.from} → ${event.to}`, event.detail ?? {}),
   });
@@ -211,6 +223,13 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   const report = await runner.run();
   const savings = journal?.stats();
   journal?.close();
+
+  const reportMd = values['report-md'];
+  if (typeof reportMd === 'string' && reportMd !== '') {
+    const commits = await commitsSince(repo, startedAt);
+    const markdown = renderRunMarkdown({ report, escalations: handoffs, calls, commits });
+    await writeFile(resolve(cwd, reportMd), markdown, 'utf8');
+  }
 
   if (values['json'] === true) {
     process.stdout.write(`${JSON.stringify({ ...report, calls }, null, 2)}\n`);
@@ -311,6 +330,20 @@ function buildContractDetector(contracts: NonNullable<SelfHealConfig['contracts'
  * into the store was a summary line at the end of a run, which is enough to know
  * something was replayed and not enough to know what.
  */
+/** The commits made since `start`, oldest first. Empty when nothing was committed or git cannot say. */
+async function commitsSince(repo: GitRepo, start: string | null): Promise<{ sha: string; subject: string }[]> {
+  if (start === null) return [];
+  const log = await repo.git('log', '--reverse', '--format=%h%x09%s', `${start}..HEAD`);
+  if (!log.ok) return [];
+  return log.stdout
+    .split('\n')
+    .filter((line) => line.includes('\t'))
+    .map((line) => {
+      const [sha = '', ...subject] = line.split('\t');
+      return { sha, subject: subject.join('\t') };
+    });
+}
+
 /** What the loop has spent, and what it bought (D-029). */
 async function statsCommand(values: Record<string, unknown>, cwd: string): Promise<number> {
   const config = await loadConfig(values['config'] as string, cwd);
