@@ -19,6 +19,31 @@ export interface CheckConfig {
   readonly args?: readonly string[];
   readonly editable: readonly string[];
   readonly timeoutMs?: number;
+  /** Lower is handled first. Inferred from the command when not set (D-033). */
+  readonly priority: number;
+}
+
+/** Builds and type checks: their failures cause others, so they go first. */
+export const ROOT_CAUSE_PRIORITY = 10;
+/** Linters: after anything that stops the code compiling, before the tests. */
+export const LINT_PRIORITY = 50;
+/** Tests, and anything not recognised. Matches core's `DEFAULT_PRIORITY`. */
+export const SYMPTOM_PRIORITY = 100;
+
+const ROOT_CAUSE = /\b(tsc|typecheck|type-check|build|compile|mypy|pyright|cargo check|go build|go vet|javac|dotnet build)\b/;
+const LINT = /\b(lint|eslint|ruff|flake8|pylint|clippy|golangci-lint|stylelint)\b/;
+
+/**
+ * A guess at causal order from a check's id and command — the same kind of guess
+ * as `DEFAULT_PROTECTED`, and kept out of `core` for the same reason: it is a
+ * convention about tools, not a rule about measurement. Whole words only, so
+ * `vitest` is not `tsc` and `rebuild-cache` is not `build`.
+ */
+export function inferPriority(check: { readonly id: string; readonly command: string; readonly args?: readonly string[] }): number {
+  const text = [check.id, check.command, ...(check.args ?? [])].join(' ').toLowerCase();
+  if (ROOT_CAUSE.test(text)) return ROOT_CAUSE_PRIORITY;
+  if (LINT.test(text)) return LINT_PRIORITY;
+  return SYMPTOM_PRIORITY;
 }
 
 /** One endpoint under contract. */
@@ -261,12 +286,20 @@ function validateCheck(input: unknown, index: number): CheckConfig {
     );
   }
 
+  const id = typeof record['id'] === 'string' ? record['id'] : `check-${index}`;
+  const args = Array.isArray(record['args']) ? record['args'].map(String) : [];
+  const priority = record['priority'];
+  if (priority !== undefined && (typeof priority !== 'number' || !Number.isFinite(priority))) {
+    throw new ConfigError(`config.checks[${index}].priority must be a number — lower runs first`);
+  }
+
   return {
-    id: typeof record['id'] === 'string' ? record['id'] : `check-${index}`,
+    id,
     command,
-    args: Array.isArray(record['args']) ? record['args'].map(String) : [],
+    args,
     editable,
     ...(typeof record['timeoutMs'] === 'number' ? { timeoutMs: record['timeoutMs'] } : {}),
+    priority: typeof priority === 'number' ? priority : inferPriority({ id, command, args }),
   };
 }
 

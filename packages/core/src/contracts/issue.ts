@@ -49,6 +49,13 @@ export interface Issue {
    * not split one bug into two identities (D-024).
    */
   readonly related?: readonly IssueLocation[];
+  /**
+   * When to handle this relative to other issues — lower first. Root causes (a
+   * type error, a broken build) before their symptoms (the tests they fail), so a
+   * symptom is often already gone by its turn (D-022, D-033). Like `related`, not
+   * part of the identity. Absent means `DEFAULT_PRIORITY`.
+   */
+  readonly priority?: number;
   readonly severity: Severity;
   /** ISO-8601. */
   readonly detectedAt: string;

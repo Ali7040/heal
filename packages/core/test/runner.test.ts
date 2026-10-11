@@ -855,6 +855,68 @@ describe('Runner', () => {
     });
   });
 
+  describe('triage order (D-033)', () => {
+    /** Healthy when value.mjs is fixed; reports with a given id and priority. */
+    function check(dir: string, id: string, priority: number | undefined): Detector {
+      const file = new FileDetector(dir);
+      return {
+        id,
+        detect: async () =>
+          (await file.detect()).map((issue) => ({
+            ...issue,
+            detectorId: id,
+            signature: `sig-${id}`,
+            ...(priority !== undefined ? { priority } : {}),
+          })),
+        verify: () => file.verify(),
+      };
+    }
+
+    /** Can only fix the root cause: proposals for the symptom change nothing. */
+    function rootCauseFixer(): Fixer & { calls: string[] } {
+      const fixer = {
+        id: 'root',
+        calls: [] as string[],
+        propose: async (diagnosis: Diagnosis) => {
+          fixer.calls.push(diagnosis.issue.detectorId);
+          const edits = diagnosis.issue.detectorId === 'typecheck' ? [{ path: 'src/value.mjs', contents: FIXED }] : [];
+          return { fixerId: 'root', signature: diagnosis.issue.signature, edits, rationale: 'r' };
+        },
+      };
+      return fixer;
+    }
+
+    it('heals the root cause first, so the symptom resolves for free', async () => {
+      sandbox = await brokenSandbox();
+      const fixer = rootCauseFixer();
+      // Detected tests-first, as a config listing tests first would.
+      const { runner } = await makeRunner(sandbox, fixer, {
+        detectors: [check(sandbox.dir, 'tests', 100), check(sandbox.dir, 'typecheck', 10)],
+      });
+
+      const report = await runner.run();
+
+      expect(report.outcomes.map((o) => [o.issue.detectorId, o.state])).toEqual([
+        ['typecheck', 'HEALED'],
+        ['tests', 'RESOLVED'],
+      ]);
+      expect(fixer.calls).toEqual(['typecheck']);
+    });
+
+    it('without priorities, pays for the symptom first — the cost this avoids', async () => {
+      sandbox = await brokenSandbox();
+      const fixer = rootCauseFixer();
+      const { runner } = await makeRunner(sandbox, fixer, {
+        detectors: [check(sandbox.dir, 'tests', undefined), check(sandbox.dir, 'typecheck', undefined)],
+      });
+
+      const report = await runner.run();
+
+      expect(report.outcomes.map((o) => o.state)).toEqual(['ESCALATED', 'HEALED']);
+      expect(fixer.calls).toEqual(['tests', 'tests', 'typecheck']);
+    });
+  });
+
   it('does nothing at all when there is nothing to detect', async () => {
     sandbox = await Sandbox.create({ files: { 'src/value.mjs': FIXED }, prefix: 'runner-test-' });
 

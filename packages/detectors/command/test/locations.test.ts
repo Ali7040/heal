@@ -134,4 +134,25 @@ describe('CommandDetector', () => {
     expect(moved?.related).toEqual([{ file: 'src/cart.ts', line: 2 }]);
     expect(moved?.signature).toBe(first?.signature);
   });
+
+describe('CommandDetector priority', () => {
+  it('puts its priority on the issue, outside the signature', async () => {
+    const box = await repo();
+    const ctx: RunContext = { repoRoot: box.dir, evidenceDir: `${box.dir}/.e`, dryRun: false, config: {}, log: silentLogger };
+    const failing = (priority?: number) =>
+      new CommandDetector({
+        id: 'check',
+        command: process.execPath,
+        args: ['-e', 'process.exit(1)'],
+        ...(priority !== undefined ? { priority } : {}),
+      });
+
+    const [early] = await failing(10).detect(ctx);
+    const [plain] = await failing().detect(ctx);
+
+    expect(early?.priority).toBe(10);
+    expect(plain?.priority).toBeUndefined();
+    expect(early?.signature).toBe(plain?.signature);
+  });
+});
 });

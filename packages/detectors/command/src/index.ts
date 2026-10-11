@@ -34,8 +34,13 @@ export interface CommandDetectorOptions {
   readonly timeoutMs?: number;
   /** Files a fixer may edit when this check fails. */
   readonly editable?: readonly string[];
-  /** Reported on issues; drives triage ordering later. */
+  /** Reported on issues; breaks ties in triage after `priority`. */
   readonly severity?: Issue['severity'];
+  /**
+   * When this check's failure is handled relative to others — lower first. A type
+   * check or build should come before the tests it breaks (D-033).
+   */
+  readonly priority?: number;
   /** Issue kind, so several command detectors can be told apart in the journal. */
   readonly kind?: string;
 }
@@ -81,6 +86,7 @@ export class CommandDetector implements Detector {
         // small, stable, hashable — travels inside the issue.
         evidence: [],
         ...(related.length > 0 ? { related } : {}),
+        ...(this.#options.priority !== undefined ? { priority: this.#options.priority } : {}),
         severity: this.#options.severity ?? 'high',
         detectedAt: new Date().toISOString(),
       },

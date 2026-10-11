@@ -6,7 +6,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { matches } from '@self-heal/core/safety/allowlist';
 
-import { ConfigError, DEFAULT_PROTECTED, DEFAULT_SANDBOX_EXCLUDE, loadConfig } from '../src/config.js';
+import {
+  ConfigError,
+  DEFAULT_PROTECTED,
+  DEFAULT_SANDBOX_EXCLUDE,
+  inferPriority,
+  LINT_PRIORITY,
+  loadConfig,
+  ROOT_CAUSE_PRIORITY,
+  SYMPTOM_PRIORITY,
+} from '../src/config.js';
 
 let dir: string | undefined;
 
@@ -75,5 +84,31 @@ describe('protected paths in config', () => {
   it('runs only verified harnesses unless told otherwise', async () => {
     expect((await configWith({})).allowUnverifiedHarness).toBe(false);
     expect((await configWith({ allowUnverifiedHarness: true })).allowUnverifiedHarness).toBe(true);
+  });
+
+  it('orders checks root cause first, guessing from the command when not told', () => {
+    const guess = (id: string, command: string, ...args: string[]) => inferPriority({ id, command, args });
+    expect(guess('types', 'npx', 'tsc', '--noEmit')).toBe(ROOT_CAUSE_PRIORITY);
+    expect(guess('build', 'npm', 'run', 'build')).toBe(ROOT_CAUSE_PRIORITY);
+    expect(guess('py', 'python', '-m', 'mypy', '.')).toBe(ROOT_CAUSE_PRIORITY);
+    expect(guess('rs', 'cargo', 'check')).toBe(ROOT_CAUSE_PRIORITY);
+    expect(guess('style', 'npx', 'eslint', '.')).toBe(LINT_PRIORITY);
+    expect(guess('tests', 'npm', 'test')).toBe(SYMPTOM_PRIORITY);
+    // Whole words: vitest is not tsc, and rebuild-cache is not build.
+    expect(guess('unit', 'npx', 'vitest', 'run')).toBe(SYMPTOM_PRIORITY);
+    expect(guess('cache', 'node', 'rebuild-cache.js')).toBe(SYMPTOM_PRIORITY);
+  });
+
+  it('takes an explicit priority over the guess, and refuses a non-number', async () => {
+    const config = await configWith({
+      checks: [
+        { id: 'tests', command: 'npm', args: ['test'], editable: ['src/**'], priority: 1 },
+        { id: 'types', command: 'npx', args: ['tsc'], editable: ['src/**'] },
+      ],
+    });
+    expect(config.checks.map((c) => c.priority)).toEqual([1, ROOT_CAUSE_PRIORITY]);
+    await expect(
+      configWith({ checks: [{ id: 't', command: 'x', editable: ['src/**'], priority: 'first' }] }),
+    ).rejects.toBeInstanceOf(ConfigError);
   });
 });

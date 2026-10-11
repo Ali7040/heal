@@ -144,6 +144,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
           args: check.args ?? [],
           editable: check.editable,
           ...(check.timeoutMs !== undefined ? { timeoutMs: check.timeoutMs } : {}),
+          priority: check.priority,
         }),
     ),
     ...(config.contracts === undefined ? [] : [buildContractDetector(config.contracts)]),

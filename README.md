@@ -149,6 +149,12 @@ nothing it does outlives the attempt. A checkpoint precedes every write, a dirty
 tree stops the run, and `HEALED` still means only one thing: the check that found
 the problem passes now.
 
+Root causes are fixed before their symptoms. Builds and type checks run first,
+then linters, then tests — guessed from each check's command (`tsc`, `build`,
+`mypy`, `cargo check`, `eslint`, …), or set with `"priority"` on a check (lower runs
+first). Fixing a type error first usually makes the failing tests it caused pass on
+re-measurement, and they are reported `RESOLVED` without a model call.
+
 Nothing is spent on a failure that does not reproduce. Each one is re-run first;
 a check that fails and then passes with nothing changed is reported `FLAKY` and
 never sent to a model — a patch for it would be "verified" by luck. The same rule

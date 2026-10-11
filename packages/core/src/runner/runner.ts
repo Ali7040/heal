@@ -172,6 +172,14 @@ export class Runner {
     }
     for (const issue of issues) this.#failing.add(checkKey(issue));
 
+    // Root causes first (D-033). Healing a type error before the tests it breaks
+    // lets the tests be re-measured and RESOLVED for free, instead of paying a
+    // model to "fix" a symptom. Stable: equal issues keep their detection order.
+    triage(issues);
+    if (issues.length > 1) {
+      ctx.log.info('triage order', { order: issues.map((issue) => `${issue.detectorId}:${issue.priority ?? DEFAULT_PRIORITY}`) });
+    }
+
     if (issues.length === 0) {
       this.#to('IDLE', undefined, { issues: 0 });
       return {
@@ -595,6 +603,24 @@ function healCommitMessage(issue: Issue, detector: Detector, patch: Patch, repla
     `Files: ${files}`,
     `Verified by re-running detector "${detector.id}".${replayed ? ' Replayed from the journal.' : ''}`,
   ].join('\n');
+}
+
+/** Priority for an issue that does not state one. Lower is handled first. */
+export const DEFAULT_PRIORITY = 100;
+
+const SEVERITY_RANK: Record<Issue['severity'], number> = { high: 0, medium: 1, low: 2 };
+
+/**
+ * Sort in place: priority, then severity, then detection order. `Array.sort` is
+ * stable, so the last key is free — and it matters: two equal issues must keep
+ * the order their detectors reported them in, or runs stop being reproducible.
+ */
+export function triage(issues: Issue[]): Issue[] {
+  return issues.sort(
+    (a, b) =>
+      (a.priority ?? DEFAULT_PRIORITY) - (b.priority ?? DEFAULT_PRIORITY) ||
+      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
+  );
 }
 
 /** Which check an issue is — its detector, kind, and place — regardless of how it fails today. */
