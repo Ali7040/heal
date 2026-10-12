@@ -19,7 +19,12 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import type { JournalPort, MeasuredOutcome, RecordedOutcome } from '@self-heal/core/contracts/journal';
+import type {
+  JournalPort,
+  MeasuredOutcome,
+  RecordedOutcome,
+  RememberedFailure,
+} from '@self-heal/core/contracts/journal';
 import type { Patch } from '@self-heal/core/contracts/patch';
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -137,6 +142,8 @@ export interface Journal extends JournalPort {
    * long one is a small cruelty that shows up the first time anyone tries it.
    */
   forget(signature: string): ForgetResult;
+  /** Failed patches for a signature, newest first — what the next run should not repeat (D-034). */
+  failures(signature: string, limit: number): Promise<RememberedFailure[]>;
   /** Record one model call. Observation only — nothing reads it to decide anything. */
   recordCall(call: CallRecord): void;
   spend(options?: { readonly since?: string }): SpendReport;
@@ -178,6 +185,10 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
       replays   = outcomes.replays + :saved
   `);
 
+  const insertFailure = db.prepare('INSERT INTO failures (at, signature, patch, reason) VALUES (?, ?, ?, ?)');
+  const selectFailures = db.prepare(
+    'SELECT at, patch, reason FROM failures WHERE signature = ? ORDER BY id DESC LIMIT ?',
+  );
   const insertMeasurement = db.prepare(
     'INSERT INTO measurements (at, signature, verified, replayed) VALUES (?, ?, ?, ?)',
   );
@@ -212,6 +223,10 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
 
       const serialized = JSON.stringify(outcome.patch);
       if (Buffer.byteLength(serialized, 'utf8') > maxPatchBytes) return;
+
+      if (!outcome.verified) {
+        insertFailure.run(new Date().toISOString(), outcome.signature, serialized, outcome.reason ?? 'verification failed');
+      }
 
       upsert.run({
         signature: outcome.signature,
@@ -262,6 +277,8 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
 
       const exact = matches[0] as string;
       db.prepare('DELETE FROM outcomes WHERE signature = ?').run(exact);
+      // "Propose fresh" means fresh: no remembered failures steering it either.
+      db.prepare('DELETE FROM failures WHERE signature = ?').run(exact);
       return { status: 'forgotten', signature: exact };
     },
 
@@ -270,6 +287,15 @@ export async function openJournal(path: string, options: JournalOptions = {}): P
         .prepare('SELECT COUNT(*) AS total, SUM(verified) AS verified, SUM(replays) AS replays FROM outcomes')
         .get() as { total: number; verified: number | null; replays: number | null };
       return { total: row.total, verified: row.verified ?? 0, replays: row.replays ?? 0 };
+    },
+
+    async failures(signature: string, limit: number): Promise<RememberedFailure[]> {
+      const rows = selectFailures.all(signature, limit) as { at: string; patch: string; reason: string }[];
+      return rows.flatMap((row) => {
+        const patch = parsePatch(row.patch);
+        // A corrupt row is skipped, not fatal — the same rule as `lookup`.
+        return patch === null ? [] : [{ patch, reason: row.reason, at: row.at }];
+      });
     },
 
     recordCall(call: CallRecord): void {

@@ -71,6 +71,19 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX IF NOT EXISTS measurements_at ON measurements (at);
   `,
+  // 3 — failed patches, kept (D-034). `outcomes` holds only the latest patch per
+  // signature, so a failure was overwritten by the next attempt and forgotten. A
+  // run could pay again for exactly the fix the last run proved wrong.
+  `
+  CREATE TABLE IF NOT EXISTS failures (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL,
+    signature  TEXT NOT NULL,
+    patch      TEXT NOT NULL,   -- JSON Patch, with the base hash of every edit
+    reason     TEXT NOT NULL    -- measured by the runner, never the model's account
+  );
+  CREATE INDEX IF NOT EXISTS failures_signature ON failures (signature, id);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

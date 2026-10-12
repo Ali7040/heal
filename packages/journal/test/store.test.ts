@@ -326,3 +326,47 @@ describe('spend', () => {
     expect(journal.spend().calls).toBe(1);
   });
 });
+
+/** What a failed fix leaves behind for the next run (D-034). */
+describe('failure memory', () => {
+  const failed = (journal: Journal, contents: string, reason?: string) =>
+    journal.record({
+      signature: 'sig-1',
+      kind: 'check-failed',
+      patch: patch(contents),
+      verified: false,
+      attempts: 1,
+      replayed: false,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+
+  it('keeps every failed patch with its measured reason, newest first', async () => {
+    const { journal } = await journalIn();
+    await failed(journal, 'first', 'verification failed; tree restored');
+    await failed(journal, 'second', 'fixed its own check but broke tests');
+
+    const remembered = await journal.failures('sig-1', 10);
+
+    expect(remembered.map((f) => [f.patch.edits[0]?.contents, f.reason])).toEqual([
+      ['second', 'fixed its own check but broke tests'],
+      ['first', 'verification failed; tree restored'],
+    ]);
+  });
+
+  it('honours the limit, and remembers nothing about a fix that worked', async () => {
+    const { journal } = await journalIn();
+    for (const n of [1, 2, 3, 4]) await failed(journal, `try ${n}`);
+    await journal.record({ signature: 'sig-1', kind: 'k', patch: patch('ok'), verified: true, attempts: 1, replayed: false });
+
+    expect((await journal.failures('sig-1', 2)).map((f) => f.patch.edits[0]?.contents)).toEqual(['try 4', 'try 3']);
+    expect(await journal.failures('other', 5)).toEqual([]);
+  });
+
+  it('forgets failures too when told to forget a signature', async () => {
+    const { journal } = await journalIn();
+    await failed(journal, 'wrong');
+    journal.forget('sig-1');
+    expect(await journal.failures('sig-1', 5)).toEqual([]);
+  });
+});
+

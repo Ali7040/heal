@@ -917,6 +917,50 @@ describe('Runner', () => {
     });
   });
 
+  describe('failures remembered from earlier runs (D-034)', () => {
+    function journalRemembering(base: string): JournalPort {
+      return {
+        lookup: async () => undefined,
+        record: async () => {},
+        failures: async () => [
+          {
+            patch: { fixerId: 'old', signature: 'sig-value', edits: [{ path: 'src/value.mjs', contents: 'x', base }], rationale: 'set it to 999' },
+            reason: 'verification failed; tree restored',
+            at: '2026-10-01T00:00:00.000Z',
+          },
+        ],
+      };
+    }
+
+    async function firstDiagnosis(journal: JournalPort): Promise<Diagnosis | undefined> {
+      const seen: Diagnosis[] = [];
+      const fixer: Fixer = {
+        id: 'watching',
+        propose: async (diagnosis) => {
+          seen.push(diagnosis);
+          return { fixerId: 'watching', signature: diagnosis.issue.signature, edits: [{ path: 'src/value.mjs', contents: FIXED }], rationale: 'r' };
+        },
+      };
+      const { runner } = await makeRunner(sandbox as Sandbox, fixer, { journal });
+      await runner.run();
+      return seen[0];
+    }
+
+    it('tells the very first proposal what an earlier run already proved wrong', async () => {
+      sandbox = await brokenSandbox();
+      const diagnosis = await firstDiagnosis(journalRemembering(hashOf(BROKEN)));
+      expect(diagnosis?.priorAttempts).toEqual([
+        { files: ['src/value.mjs'], rationale: 'set it to 999', reason: 'in an earlier run: verification failed; tree restored' },
+      ]);
+    });
+
+    it('drops a remembered failure once its files have changed — it may no longer apply', async () => {
+      sandbox = await brokenSandbox();
+      const diagnosis = await firstDiagnosis(journalRemembering(hashOf('the file as it was last week\n')));
+      expect(diagnosis?.priorAttempts).toBeUndefined();
+    });
+  });
+
   it('does nothing at all when there is nothing to detect', async () => {
     sandbox = await Sandbox.create({ files: { 'src/value.mjs': FIXED }, prefix: 'runner-test-' });
 

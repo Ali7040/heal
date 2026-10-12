@@ -365,6 +365,12 @@ self-heal journal                   # ✔ fa0f950f  check-failed  src/pricing.mj
 self-heal journal --forget fa0f950f # stop offering that one; propose fresh instead
 ```
 
+Failures are remembered as well as fixes. A patch measured wrong in an earlier run
+is shown to the next run's first proposal — "this was tried, and failed because…" —
+so the same wrong fix is not paid for twice. Only while the files it was tried
+against are unchanged: once the code moves on, an old failure may no longer apply,
+and it is dropped rather than allowed to mislead.
+
 `--forget` takes the short signature the listing prints, and refuses an ambiguous
 prefix rather than deleting the wrong remembered fix.
 

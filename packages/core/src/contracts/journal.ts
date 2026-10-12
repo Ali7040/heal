@@ -31,11 +31,27 @@ export interface RecordedOutcome {
  */
 export interface MeasuredOutcome extends RecordedOutcome {
   readonly replayed: boolean;
+  /** Why a failed measurement failed, as the runner measured it. Absent when verified. */
+  readonly reason?: string;
+}
+
+/** A patch measured as a failure in an earlier run, and why (D-034). */
+export interface RememberedFailure {
+  readonly patch: Patch;
+  readonly reason: string;
+  /** ISO-8601. */
+  readonly at: string;
 }
 
 export interface JournalPort {
   lookup(signature: string): Promise<RecordedOutcome | undefined>;
   record(outcome: MeasuredOutcome): Promise<void>;
+  /**
+   * The most recent failed patches for a signature, newest first. Optional: a
+   * journal without failure memory simply never offers any, and the runner
+   * proposes as if each run were the first.
+   */
+  failures?(signature: string, limit: number): Promise<readonly RememberedFailure[]>;
 }
 
 export class NullJournal implements JournalPort {

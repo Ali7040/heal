@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import type { RunContext } from '@self-heal/core/contracts/context';
 import type { Detector } from '@self-heal/core/contracts/detector';
+import type { Diagnosis } from '@self-heal/core/contracts/diagnosis';
 import type { Fixer } from '@self-heal/core/contracts/fixer';
 import type { Issue } from '@self-heal/core/contracts/issue';
 import type { Patch } from '@self-heal/core/contracts/patch';
@@ -243,3 +244,39 @@ describe('a journal across two runs', () => {
     expect(fixer.calls).toBe(2);
   });
 });
+
+describe('failures, remembered across runs (D-034)', () => {
+  it("offers run two's first proposal the failure run one measured", async () => {
+    sandbox = await Sandbox.create({ files: { [FILE]: BROKEN, '.gitignore': GITIGNORE }, prefix: 'self-heal-memory-' });
+    journal = await openJournal(join(sandbox.dir, '.self-heal', 'journal.sqlite'));
+
+    const seen: Diagnosis[] = [];
+    const wrong: Fixer = {
+      id: 'wrong',
+      propose: async (diagnosis) => {
+        seen.push(diagnosis);
+        return {
+          fixerId: 'wrong',
+          signature: diagnosis.issue.signature,
+          edits: [{ path: FILE, contents: 'export const rate = 0.5;\n' }],
+          rationale: 'guess a rate of 0.5',
+        };
+      },
+    };
+
+    const first = await runOnce(sandbox.dir, wrong, journal);
+    expect(first.outcomes[0]?.state).toBe('ESCALATED');
+    expect(seen[0]?.priorAttempts).toBeUndefined();
+
+    // A new run, nothing changed in between: it starts already knowing.
+    seen.length = 0;
+    await runOnce(sandbox.dir, wrong, journal);
+
+    expect(seen[0]?.priorAttempts?.[0]).toEqual({
+      files: [FILE],
+      rationale: 'guess a rate of 0.5',
+      reason: 'in an earlier run: verification failed; tree restored',
+    });
+  });
+});
+

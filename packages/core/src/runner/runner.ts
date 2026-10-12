@@ -245,6 +245,20 @@ export class Runner {
     // What already failed for this issue, fed to the next proposal so a retry is
     // a different guess rather than the same prompt paid for twice (D-018).
     const failures: PriorAttempt[] = [];
+
+    // …including in earlier runs (D-034). Only a failure whose files are still
+    // byte-identical to what it was tried against is offered: same starting point,
+    // same patch, same measured failure. Once the code has moved on, an old failure
+    // may no longer apply, and telling the model "that did not work" could steer it
+    // away from what is now the right fix.
+    for (const earlier of (await this.#journal.failures?.(issue.signature, REMEMBERED_FAILURES)) ?? []) {
+      if ((await staleEdits(earlier.patch, ctx.repoRoot, { requireBase: true })).length > 0) continue;
+      const prior = priorAttempt(earlier.patch, `in an earlier run: ${earlier.reason}`);
+      if (!failures.some((known) => sameAttempt(known, prior))) failures.push(prior);
+    }
+    if (failures.length > 0) {
+      ctx.log.info('remembered failures offered', { signature: issue.signature, count: failures.length });
+    }
     // The same story at full resolution, for the person who takes over (D-028).
     const history: AttemptRecord[] = [];
     let lastDiagnosis: Diagnosis | undefined;
@@ -398,7 +412,7 @@ export class Runner {
       this.#breaker.recordFailure();
       const reason = 'verification failed; tree restored';
       this.#to('REVERTED', issue.signature, { reason });
-      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts, replayed });
+      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts, replayed, reason });
       return { issue, state: 'REVERTED', attempts, patch, reason, replayed };
     }
 
@@ -412,7 +426,7 @@ export class Runner {
       this.#breaker.recordFailure();
       const reason = `fixed its own check but broke ${broke.join(', ')}; tree restored`;
       this.#to('REVERTED', issue.signature, { reason, broke });
-      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts, replayed });
+      await this.#journal.record({ signature: issue.signature, kind: issue.kind, patch, verified: false, attempts, replayed, reason });
       return { issue, state: 'REVERTED', attempts, patch, reason, replayed };
     }
 
@@ -603,6 +617,13 @@ function healCommitMessage(issue: Issue, detector: Detector, patch: Patch, repla
     `Files: ${files}`,
     `Verified by re-running detector "${detector.id}".${replayed ? ' Replayed from the journal.' : ''}`,
   ].join('\n');
+}
+
+/** Most failures from earlier runs offered to one proposal — the newest are the most relevant. */
+export const REMEMBERED_FAILURES = 3;
+
+function sameAttempt(a: PriorAttempt, b: PriorAttempt): boolean {
+  return a.rationale === b.rationale && a.files.join('\n') === b.files.join('\n');
 }
 
 /** Priority for an issue that does not state one. Lower is handled first. */
