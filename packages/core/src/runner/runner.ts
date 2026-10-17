@@ -31,6 +31,7 @@ import type { Patch } from '../contracts/patch.js';
 import type { GitRepo } from '../git/repo.js';
 import { checkPatch } from '../safety/allowlist.js';
 import { applyPatch } from '../safety/apply.js';
+import { acquireLock } from '../safety/lock.js';
 import { staleEdits, stampBases } from '../safety/base.js';
 import { CircuitBreaker } from '../safety/circuit-breaker.js';
 import { canTransition, type RunState } from './state.js';
@@ -57,6 +58,11 @@ export interface RunnerOptions {
    * guarantee for one less full detection per heal.
    */
   readonly collateralCheck?: boolean;
+  /**
+   * Take the per-repository run lock (D-035). Default on. Off only for a caller
+   * that already serialises runs itself.
+   */
+  readonly lock?: boolean;
   /**
    * How many times a failure must re-run and fail again before anything is spent
    * on it — and before a newly failing check counts against a fix (D-030).
@@ -148,6 +154,29 @@ export class Runner {
 
   async run(): Promise<RunReport> {
     const startedAt = Date.now();
+
+    // A dry run writes nothing, so it cannot collide with anything — and taking a
+    // lock would itself be a write it promised not to make (invariant 7).
+    if (this.#options.ctx.dryRun || this.#options.lock === false) return this.#runUnlocked(startedAt);
+
+    // One run per repository (D-035). Taken before the dirty-tree check: another
+    // run mid-attempt makes the tree dirty, and "dirty" would be the wrong reason.
+    const lockPath = await this.#options.repo.gitPath('self-heal.lock');
+    if (lockPath === null) return this.#halted(startedAt, [], 'could not locate the git directory to take the run lock');
+    const lock = await acquireLock(lockPath);
+    if (!lock.acquired) {
+      const who = lock.holder === null ? 'another run' : `pid ${lock.holder.pid} on ${lock.holder.host}, since ${lock.holder.startedAt}`;
+      return this.#halted(startedAt, [], `another self-heal run is in progress in this repository (${who}); lock: ${lockPath}`);
+    }
+
+    try {
+      return await this.#runUnlocked(startedAt);
+    } finally {
+      await lock.release();
+    }
+  }
+
+  async #runUnlocked(startedAt: number): Promise<RunReport> {
     const { ctx, repo, detectors } = this.#options;
     const outcomes: IssueOutcome[] = [];
 

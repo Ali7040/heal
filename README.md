@@ -222,6 +222,9 @@ Assertions in the engine, not guidelines. Each one is covered by a test.
 8. A patch may never touch what the checks measure against — tests, baselines,
    recorded contracts, `.self-heal/`, the config — whatever the allowlist says. A
    fix that edits the measurement makes the check pass without fixing anything.
+9. One run per repository at a time. A second run — a hook, a watcher, a manual
+   run — halts rather than interleaving checkpoints with the first. The lock lives
+   in `.git/`, never the working tree, and a crashed run's lock is reclaimed.
 
 Test files are protected by default (`*.test.*`, `*.spec.*`, `*_test.*`,
 `test_*.py`, `__tests__/`, `test/`, `tests/`). Set `"protected"` in the config to

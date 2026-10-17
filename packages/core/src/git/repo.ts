@@ -17,6 +17,8 @@
  * with no global git identity (CI, a fresh container), and it must never mutate
  * the user's config to get there.
  */
+import { isAbsolute, resolve } from 'node:path';
+
 import { runCommand, type CommandResult } from '../process.js';
 
 export interface GitRepoOptions {
@@ -88,6 +90,18 @@ export class GitRepo {
     // that stages its own work must not be able to hide a change from us.
     const result = await this.git('diff', 'HEAD');
     return result.ok ? result.stdout : '';
+  }
+
+  /**
+   * Absolute path of a file inside the repository's git directory — where state
+   * that must never appear in the working tree can live. `--git-path` resolves
+   * worktrees and `GIT_DIR` correctly, which joining `.git/` by hand does not.
+   */
+  async gitPath(name: string): Promise<string | null> {
+    const result = await this.git('rev-parse', '--git-path', name);
+    if (!result.ok) return null;
+    const path = result.stdout.trim();
+    return isAbsolute(path) ? path : resolve(this.dir, path);
   }
 
   async currentCommit(): Promise<string | null> {

@@ -9,6 +9,8 @@
  *
  * No model is involved anywhere in this file.
  */
+import { existsSync } from 'node:fs';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { RunContext } from '../src/contracts/context.js';
@@ -23,6 +25,7 @@ import { GitRepo } from '../src/git/repo.js';
 import { silentLogger } from '../src/logger.js';
 import { Runner, type TransitionEvent } from '../src/runner/runner.js';
 import { contentHash } from '../src/safety/base.js';
+import { acquireLock } from '../src/safety/lock.js';
 import { Sandbox } from '@self-heal/testkit/sandbox';
 
 const BROKEN = 'export const value = 1;\n';
@@ -958,6 +961,79 @@ describe('Runner', () => {
       sandbox = await brokenSandbox();
       const diagnosis = await firstDiagnosis(journalRemembering(hashOf('the file as it was last week\n')));
       expect(diagnosis?.priorAttempts).toBeUndefined();
+    });
+  });
+
+  describe('one run per repository (D-035)', () => {
+    async function holdLock(box: Sandbox) {
+      const path = await new GitRepo({ dir: box.dir }).gitPath('self-heal.lock');
+      const held = await acquireLock(path as string);
+      if (!held.acquired) throw new Error('test could not take the lock');
+      return { path: path as string, release: held.release };
+    }
+
+    it('halts a second run instead of interleaving with the first, and touches nothing', async () => {
+      sandbox = await brokenSandbox();
+      const other = await holdLock(sandbox);
+      const head = await sandbox.git.currentCommit();
+      let proposed = false;
+      const fixer: Fixer = {
+        id: 'never',
+        propose: async (diagnosis) => {
+          proposed = true;
+          return { fixerId: 'never', signature: diagnosis.issue.signature, edits: [], rationale: '' };
+        },
+      };
+      const { runner } = await makeRunner(sandbox, fixer);
+
+      const report = await runner.run();
+      await other.release();
+
+      expect(report.halted).toBe(true);
+      expect(report.haltReason).toMatch(/another self-heal run is in progress/);
+      expect(proposed).toBe(false);
+      expect(await sandbox.git.currentCommit()).toBe(head);
+    });
+
+    it('keeps the lock out of the working tree, and releases it when done', async () => {
+      sandbox = await brokenSandbox();
+      const { runner } = await makeRunner(sandbox, fixerReturning([{ path: 'src/value.mjs', contents: FIXED }]));
+
+      const report = await runner.run();
+
+      expect(report.outcomes[0]?.state).toBe('HEALED');
+      expect(await sandbox.git.isClean()).toBe(true);
+      const path = await new GitRepo({ dir: sandbox.dir }).gitPath('self-heal.lock');
+      expect(existsSync(path as string)).toBe(false);
+    });
+
+    it('releases the lock even when a run throws', async () => {
+      sandbox = await brokenSandbox();
+      const exploding: Detector = {
+        id: 'boom',
+        detect: async () => {
+          throw new Error('detector bug');
+        },
+        verify: async () => true,
+      };
+      const { runner } = await makeRunner(sandbox, fixerReturning([]), { detectors: [exploding] });
+
+      await expect(runner.run()).rejects.toThrow('detector bug');
+
+      const path = await new GitRepo({ dir: sandbox.dir }).gitPath('self-heal.lock');
+      expect(existsSync(path as string)).toBe(false);
+    });
+
+    it('lets a dry run through while a real run holds the lock — it writes nothing', async () => {
+      sandbox = await brokenSandbox();
+      const other = await holdLock(sandbox);
+      const { runner } = await makeRunner(sandbox, fixerReturning([]), { ctx: contextFor(sandbox.dir, true) });
+
+      const report = await runner.run();
+      await other.release();
+
+      expect(report.halted).toBe(false);
+      expect(report.outcomes[0]?.state).toBe('PROPOSED');
     });
   });
 
