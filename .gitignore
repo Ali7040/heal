@@ -11,12 +11,9 @@ dist/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/*
 !.vscode/extensions.json
 
 # Env
-.env
-.env.*
 !.env.example
 # Design docs stay local; the README is the only published markdown.
 *.md
@@ -28,3 +25,4 @@ Thumbs.db
 packages/**/README.md
 packages/**/LICENSE
 *.tgz
+config.bat

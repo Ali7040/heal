@@ -13,7 +13,7 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "node init && tsc --build",
     "clean": "tsc --build --clean",
     "typecheck": "tsc --build --force",
     "test": "vitest run",

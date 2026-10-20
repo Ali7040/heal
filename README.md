@@ -232,6 +232,37 @@ replace that list; `.self-heal/` and the config file stay protected regardless.
 
 ---
 
+## While you work
+
+A regression is cheapest to fix minutes after it was written. Two ways to catch it
+there:
+
+```bash
+self-heal watch                    # re-measure on every save; free, no model calls
+self-heal watch --heal             # …and fix a newly failing check on a clean tree
+self-heal hook install             # check (and fix) before every git push
+self-heal hook install --detect-only   # check before every push; never call a model
+```
+
+`watch` prints only what changed — `✗ tests (check-failed) is failing`,
+`✔ tests (check-failed) passes again`. The loop will not touch a tree with
+uncommitted changes, and while you are editing there always are, so watching is
+detection. With `--heal` it fixes on a clean tree — right after you commit, for
+instance — and tries each issue once per session, so a fix that keeps failing is
+not paid for every few seconds.
+
+The **pre-push hook** turns the run into a push decision:
+
+| The run | The push |
+|---|---|
+| everything passes | goes ahead |
+| fixes were committed | stops — review them (`git log --author=self-heal`), then push again |
+| something still fails | stops — `git push --no-verify` to push anyway |
+| uncommitted changes | goes ahead, with a note that it was not checked |
+
+It never overwrites a hook it did not write, and `self-heal hook uninstall`
+removes only its own.
+
 ## In CI
 
 When a build on your branch fails, the action runs the loop on a fresh

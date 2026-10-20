@@ -15,7 +15,7 @@
     "./bench": "./dist/bench.js"
   },
   "scripts": {
-    "build": "tsc --build"
+    "build": "node init && tsc --build"
   },
   "dependencies": {
     "@self-heal/core": "workspace:*"
