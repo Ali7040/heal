@@ -8,7 +8,13 @@ export default tseslint.config(
     // Node globals. TS files get these from @types/node; plain .mjs scripts need
     // them declared or `process` reads as an undefined browser global.
     languageOptions: {
-      globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly' },
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        Buffer: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+      },
     },
   },
   js.configs.recommended,

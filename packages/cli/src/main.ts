@@ -9,6 +9,7 @@
  * has no knowledge of harnesses, git shims, or file systems.
  */
 import { parseArgs } from 'node:util';
+import { watch } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 
@@ -19,7 +20,8 @@ import type { Issue } from '@self-heal/core/contracts/issue';
 import { buildDiagnosis } from '@self-heal/core/diagnosis/build';
 import { GitRepo } from '@self-heal/core/git/repo';
 import { createConsoleLogger } from '@self-heal/core/logger';
-import { Runner, type IssueOutcome } from '@self-heal/core/runner/runner';
+import { runCommand } from '@self-heal/core/process';
+import { Runner, type IssueOutcome, type RunReport } from '@self-heal/core/runner/runner';
 import { CommandDetector } from '@self-heal/detector-command';
 import { ContractDetector } from '@self-heal/detector-contract';
 import { VisualDetector } from '@self-heal/detector-visual';
@@ -32,6 +34,8 @@ import { renderEscalation, writeEscalation } from './escalation.js';
 import { renderRunMarkdown } from './report-md.js';
 import { formatRunSpend, formatSpend, parseSince } from './stats.js';
 import { selectDetectors } from './select.js';
+import { HookError, installHook, prePushVerdict, uninstallHook } from './hook.js';
+import { debounce, failingChecks, maybeRelevant, signaturesToHeal, statusChanges, type Failing } from './watch.js';
 
 const USAGE = `self-heal — detect, propose, verify, record
 
@@ -41,6 +45,8 @@ Usage:
   self-heal init    [--config <path>]
   self-heal journal [--limit <n>] [--forget <signature>] [--json]
   self-heal stats   [--since <7d|24h|date>] [--json]
+  self-heal watch   [--heal] [--only <id,...>] [--debounce <ms>]
+  self-heal hook    install [--detect-only] | uninstall
 
 Options:
   --dry-run      Detect, diagnose, and propose — then stop and print the patch.
@@ -62,6 +68,13 @@ Options:
                  occurrence is proposed fresh instead of replayed.
   --since        stats: only count what happened after this — a duration
                  (7d, 24h) or a date. Default: all time.
+  --heal         watch: also fix a newly failing check — only on a clean tree
+                 (just after a commit, say), and once per issue per session.
+                 Without it, watching is detection only, and free.
+  --debounce     watch: quiet time after the last change before re-measuring
+                 (default 500 ms).
+  --detect-only  hook install: block a failing push without calling a model.
+  --pre-push     run: what the hook calls. Exit code is the push decision.
   --fixer        "harness" (default) drives the agent CLI you already have
                  installed. "noop" proposes nothing — the loop still detects,
                  diagnoses, and reports, for free. --dry-run implies "noop".
@@ -83,6 +96,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       forget: { type: 'string' },
       since: { type: 'string' },
       'report-md': { type: 'string' },
+      'pre-push': { type: 'boolean', default: false },
+      'detect-only': { type: 'boolean', default: false },
+      heal: { type: 'boolean', default: false },
+      debounce: { type: 'string', default: '500' },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -110,6 +127,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         return await journalCommand(values, cwd);
       case 'stats':
         return await statsCommand(values, cwd);
+      case 'watch':
+        return await watchCommand(values, cwd);
+      case 'hook':
+        return await hookCommand(values, positionals[1], cwd);
       default:
         process.stderr.write(`unknown command: ${positionals[0]}\n\n${USAGE}`);
         return 1;
@@ -125,11 +146,29 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-async function runCommand_(values: Record<string, unknown>, cwd: string): Promise<number> {
-  const config = await loadConfig(values['config'] as string, cwd);
-  const dryRun = values['dry-run'] === true;
+interface RunOptions {
+  /** Overrides `--dry-run`, for watch mode's free detection cycles. */
+  readonly dryRun?: boolean;
+  /** No report on stdout and only errors logged — watch mode prints its own lines. */
+  readonly quiet?: boolean;
+  readonly onReport?: (report: RunReport) => void;
+}
 
-  const log = createConsoleLogger({ level: values['verbose'] === true ? 'debug' : 'info' });
+async function runCommand_(values: Record<string, unknown>, cwd: string, options: RunOptions = {}): Promise<number> {
+  const config = await loadConfig(values['config'] as string, cwd);
+  const dryRun = options.dryRun ?? values['dry-run'] === true;
+  const prePush = values['pre-push'] === true;
+
+  // Before a push, a dirty tree means the code being measured is not the code being
+  // pushed — and the loop would refuse it anyway. Skip, say so, let the push go.
+  if (prePush && !(await new GitRepo({ dir: config.repoRoot }).isClean())) {
+    process.stderr.write(`${prePushVerdict({ dirty: true }).message}\n`);
+    return 0;
+  }
+
+  const log = createConsoleLogger({
+    level: options.quiet === true ? 'error' : values['verbose'] === true ? 'debug' : 'info',
+  });
 
   // Three detector kinds, one list. The runner is handed `Detector[]` and cannot
   // tell which is which — that indistinguishability is the whole claim of the
@@ -224,6 +263,7 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
   const report = await runner.run();
   const savings = journal?.stats();
   journal?.close();
+  options.onReport?.(report);
 
   const reportMd = values['report-md'];
   if (typeof reportMd === 'string' && reportMd !== '') {
@@ -232,7 +272,9 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     await writeFile(resolve(cwd, reportMd), markdown, 'utf8');
   }
 
-  if (values['json'] === true) {
+  if (options.quiet === true) {
+    // Watch mode reads the report through `onReport` and prints its own lines.
+  } else if (values['json'] === true) {
     process.stdout.write(`${JSON.stringify({ ...report, calls }, null, 2)}\n`);
   } else {
     process.stdout.write(formatReport(report.outcomes, report.issues, dryRun, escalations));
@@ -243,8 +285,15 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     }
   }
 
+  // The hook's exit code is a push decision, not a run outcome (D-036).
+  if (prePush) {
+    const verdict = prePushVerdict({ dirty: false, report });
+    process.stderr.write(`\n${verdict.message}\n`);
+    return verdict.code;
+  }
+
   if (report.halted) {
-    process.stderr.write(`halted: ${report.haltReason}\n`);
+    if (options.quiet !== true) process.stderr.write(`halted: ${report.haltReason}\n`);
     return 3;
   }
 
@@ -254,6 +303,189 @@ async function runCommand_(values: Record<string, unknown>, cwd: string): Promis
     (o) => o.state !== 'HEALED' && o.state !== 'RESOLVED' && o.state !== 'PROPOSED',
   );
   return unresolved.length > 0 ? 1 : 0;
+}
+
+/**
+ * `self-heal hook install|uninstall` (D-036). Only ever touches a hook it wrote.
+ */
+async function hookCommand(values: Record<string, unknown>, action: string | undefined, cwd: string): Promise<number> {
+  const repo = new GitRepo({ dir: cwd });
+  if (!(await repo.isRepo())) {
+    process.stderr.write(`${cwd} is not a git repository\n`);
+    return 2;
+  }
+
+  try {
+    if (action === 'install') {
+      const detectOnly = values['detect-only'] === true;
+      const result = await installHook(repo, { detectOnly, config: values['config'] as string });
+      process.stdout.write(
+        `${result.status} ${result.path}\n` +
+          (detectOnly
+            ? 'pushes will be checked, and stopped while a check fails — no model is called.\n'
+            : 'pushes will be checked and failures fixed first; stopped while anything still fails.\n') +
+          'bypass once with `git push --no-verify`; remove with `self-heal hook uninstall`.\n',
+      );
+      return 0;
+    }
+    if (action === 'uninstall') {
+      const result = await uninstallHook(repo);
+      const said = {
+        removed: `removed ${result.path}`,
+        absent: 'no pre-push hook installed',
+        foreign: `${result.path} was not written by self-heal; left alone`,
+      }[result.status];
+      process.stdout.write(`${said}\n`);
+      return result.status === 'foreign' ? 1 : 0;
+    }
+  } catch (error) {
+    if (error instanceof HookError) {
+      process.stderr.write(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
+
+  process.stderr.write('usage: self-heal hook install [--detect-only] | self-heal hook uninstall\n');
+  return 1;
+}
+
+/** Stands for "HEAD moved" — a commit or checkout, which changes no working file. */
+const HEAD_MOVED = '\0HEAD';
+
+/**
+ * `self-heal watch` (D-036). Detection on every save, which is free; healing only
+ * with `--heal`, on a clean tree, once per issue per session.
+ */
+async function watchCommand(values: Record<string, unknown>, cwd: string): Promise<number> {
+  const config = await loadConfig(values['config'] as string, cwd);
+  const repo = new GitRepo({ dir: config.repoRoot });
+  const heal = values['heal'] === true;
+  const delay = Number.parseInt(String(values['debounce'] ?? '500'), 10);
+  const debounceMs = Number.isFinite(delay) && delay >= 0 ? delay : 500;
+
+  const out = (line: string) => process.stdout.write(`${new Date().toLocaleTimeString()}  ${line}\n`);
+  const attempted = new Set<string>();
+  let previous = new Map<string, Failing>();
+  let running = false;
+  let hinted = false;
+  let first = true;
+
+  const measure = async (overrides: Record<string, unknown>, dryRun: boolean): Promise<RunReport | undefined> => {
+    let report: RunReport | undefined;
+    await runCommand_({ ...values, ...overrides }, cwd, {
+      dryRun,
+      quiet: true,
+      onReport: (r) => {
+        report = r;
+      },
+    });
+    return report;
+  };
+
+  const cycle = async (): Promise<void> => {
+    running = true;
+    try {
+      const detected = await measure({}, true);
+      if (detected === undefined) return;
+      if (detected.halted) {
+        out(`skipped: ${detected.haltReason ?? 'the run halted'}`);
+        return;
+      }
+      let current = failingChecks(detected);
+      for (const line of statusChanges(previous, current)) out(line);
+      if (first && current.size === 0) out('✔ all checks pass');
+      first = false;
+
+      const clean = await repo.isClean();
+      const toHeal = signaturesToHeal({ heal, clean, failing: current, attempted });
+      if (toHeal.length > 0) {
+        // Narrowed to the detectors that own something untried, so an issue already
+        // escalated this session is not paid for again.
+        const owners = [
+          ...new Set(detected.outcomes.filter((o) => toHeal.includes(o.issue.signature)).map((o) => o.issue.detectorId)),
+        ];
+        for (const o of detected.outcomes) if (owners.includes(o.issue.detectorId)) attempted.add(o.issue.signature);
+        out(`healing: ${owners.join(', ')}…`);
+        const healed = await measure({ only: owners }, false);
+        if (healed !== undefined && !healed.halted) {
+          for (const o of healed.outcomes) out(`  ${o.state} ${o.issue.detectorId}: ${o.reason}`);
+          const fixed = new Set(
+            healed.outcomes.filter((o) => o.state === 'HEALED' || o.state === 'RESOLVED').map((o) => o.issue.signature),
+          );
+          current = new Map([...current].filter(([, f]) => !fixed.has(f.signature)));
+        } else if (healed?.halted === true) {
+          out(`skipped healing: ${healed.haltReason ?? 'the run halted'}`);
+        }
+      } else if (heal && !clean && current.size > 0 && !hinted) {
+        out('  uncommitted changes: commit or stash to let self-heal fix it');
+        hinted = true;
+      }
+      previous = current;
+    } catch (error) {
+      out(`error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      running = false;
+    }
+  };
+
+  const flush = async (paths: string[]): Promise<void> => {
+    // Changes while a run is in progress are mostly its own (checkpoints, restores,
+    // fix commits). Dropping them is what keeps a heal from triggering itself.
+    if (running) return;
+    const moved = paths.includes(HEAD_MOVED);
+    const candidates = paths
+      .filter((p) => p !== HEAD_MOVED)
+      .map((p) => p.split('\\').join('/'))
+      .filter(maybeRelevant);
+    if (!moved && candidates.length === 0) return;
+    if (!moved && (await allIgnored(config.repoRoot, candidates))) return;
+    await cycle();
+  };
+
+  const trigger = debounce(debounceMs, (paths) => void flush(paths));
+  const watchers = [
+    watch(config.repoRoot, { recursive: true }, (_event, name) => {
+      if (name !== null) trigger(String(name));
+    }),
+  ];
+  const headLog = await repo.gitPath('logs/HEAD');
+  try {
+    if (headLog !== null) watchers.push(watch(headLog, () => trigger(HEAD_MOVED)));
+  } catch {
+    // No commits yet: there is no reflog to watch, and nothing to heal from either.
+  }
+
+  out(
+    `watching ${config.repoRoot} — ${heal ? 'detecting, and healing on a clean tree' : 'detecting only, no model calls'}. Ctrl+C to stop.`,
+  );
+  await cycle();
+
+  await new Promise<void>((done) =>
+    process.once('SIGINT', () => {
+      for (const watcher of watchers) watcher.close();
+      done();
+    }),
+  );
+  return 0;
+}
+
+/** True when git ignores every one of these paths — build output, caches, logs. */
+async function allIgnored(repoRoot: string, paths: readonly string[]): Promise<boolean> {
+  const result = await runCommand('git', ['check-ignore', '--stdin'], {
+    cwd: repoRoot,
+    stdin: paths.join('\n'),
+    timeoutMs: 10_000,
+  });
+  // Exit 1 means "none ignored"; anything else unexpected means "do not skip".
+  if (result.code !== 0) return false;
+  const ignored = new Set(
+    result.stdout
+      .split('\n')
+      .map((line) => line.trim().split('\\').join('/'))
+      .filter(Boolean),
+  );
+  return paths.every((path) => ignored.has(path));
 }
 
 /**

@@ -18,7 +18,7 @@
  * surfaces as a resolution failure here rather than as a broken install for
  * someone else.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { copyFile, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -217,6 +217,56 @@ ${narrowed}`);
   if (!stats.includes('nothing measured yet')) fail(`stats on an unspent repo should say so:\n${stats}`);
   cli(['stats', '--since', 'last week'], target, 2);
   ok('stats, and a bad --since is refused');
+
+  // The hook is run by git, not by us: install it, then push for real to a bare
+  // remote. The smoke check fails, so a detect-only hook must stop the push — and
+  // the remote must not have received the branch (D-036).
+  step('the pre-push hook stops a push while a check fails');
+  cli(['hook', 'install', '--detect-only'], target);
+  const remote = join(scratch, 'remote.git');
+  run('git', ['init', '-q', '--bare', remote], scratch);
+  run('git', ['remote', 'add', 'origin', remote], target);
+  const binDir = dirname(bin);
+  const pushEnv = { ...process.env, PATH: `${binDir}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}` };
+  let pushed;
+  try {
+    run('git', ['push', '-q', 'origin', 'HEAD:refs/heads/main'], target, { env: pushEnv, stdio: 'pipe' });
+    pushed = true;
+  } catch (error) {
+    pushed = false;
+    const said = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+    if (!said.includes('push stopped')) fail(`the hook stopped the push without saying why:\n${said}`);
+  }
+  if (pushed) fail('the pre-push hook let a push through while the smoke check fails');
+  const received = spawnSync('git', ['rev-parse', '--verify', '-q', 'refs/heads/main'], { cwd: remote }).status === 0;
+  if (received) fail('the remote received the branch despite the hook');
+  cli(['hook', 'uninstall'], target);
+  ok('hook install, a real push stopped, hook uninstall');
+
+  // Watch runs until interrupted. Start it, wait for it to report the failing
+  // check on its first measurement, then stop it.
+  step('watch reports a failing check');
+  const watched = await new Promise((done) => {
+    const child = spawn(bin, ['watch'], { cwd: target, shell: process.platform === 'win32' });
+    let output = '';
+    const finish = (result) => {
+      clearTimeout(timer);
+      // On Windows the child is cmd.exe wrapping node: killing it alone leaves the
+      // watcher running, holding the directory open so cleanup fails. Kill the tree,
+      // and wait for it to be gone before anything removes the directory.
+      child.once('exit', () => done(result));
+      if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      else child.kill();
+    };
+    const timer = setTimeout(() => finish(output), 60_000);
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+      if (output.includes('is failing')) finish(output);
+    });
+    child.stderr.on('data', (chunk) => (output += chunk));
+  });
+  if (!watched.includes('✗ smoke (check-failed) is failing')) fail(`watch did not report the failing check:\n${watched}`);
+  ok('watch');
 
   console.log(`\n✓ the published artifact works. ${byPackage.size} package(s) ready at 0.1.0.\n`);
 } finally {
