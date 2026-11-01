@@ -45,7 +45,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node init && tsc --build"
+    "build": "tsc --build"
   },
   "dependencies": {},
   "devDependencies": {

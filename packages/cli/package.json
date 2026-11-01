@@ -30,7 +30,7 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "build": "node init && tsc --build"
+    "build": "tsc --build"
   },
   "dependencies": {
     "@self-heal/core": "workspace:*",
